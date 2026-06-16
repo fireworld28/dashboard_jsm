@@ -707,18 +707,18 @@ def section_chansonometre(artist: dict) -> None:
 
 # Correspondance label UI → alias Pandas resample
 _RESAMPLE_ALIAS: dict[str, str] = {
-    "Jour":   "D",
+    "Jour":    "D",
     "Semaine": "W",
-    "Mois":   "ME",
-    "Année":  "YE",
+    "Mois":    "ME",
+    "Année":   "YE",
 }
 
-# Couleurs RGBA standard (compatibles Plotly / Python 3.14+)
-# Lime  #C8F135  → rgb(200, 241, 53)
-# Muted #6B7280  → rgb(107, 114, 128)
-_FILL_LIME  = "rgba(200, 241, 53, 0.08)"   # remplace f"{PALETTE['lime']}18"
-_FILL_MUTED = "rgba(107, 114, 128, 0.12)"  # remplace f"{PALETTE['muted']}20"
-_FILL_RADAR = "rgba(200, 241, 53, 0.14)"   # remplace f"{PALETTE['lime']}25"
+# Couleurs RGBA standard — évite tout hex 8-chars refusé par le validateur Plotly
+# #C8F135 lime  → rgb(200, 241, 53)
+# #6B7280 muted → rgb(107, 114, 128)
+_FILL_LIME  = "rgba(200, 241, 53,  0.08)"
+_FILL_MUTED = "rgba(107, 114, 128, 0.12)"
+_FILL_RADAR = "rgba(200, 241, 53,  0.14)"
 
 
 def section_trends(
@@ -735,9 +735,8 @@ def section_trends(
 
     col_line, col_radar = st.columns([1.2, 1], gap="large")
 
-    # ── Line Chart : streams estimés depuis la DB ─────────────────────
+    # ── Line Chart : streams estimés ─────────────────────────────────────
     with col_line:
-        # En-tête + sélecteur de granularité sur la même ligne visuelle
         st.markdown(
             f"<div style='font-size:0.78rem;color:{PALETTE['muted']};font-weight:600;"
             f"letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.3rem;'>"
@@ -748,7 +747,7 @@ def section_trends(
         granularity = st.radio(
             label="Agrégation temporelle",
             options=list(_RESAMPLE_ALIAS.keys()),
-            index=1,               # "Semaine" par défaut
+            index=1,                        # "Semaine" par défaut
             horizontal=True,
             label_visibility="collapsed",
         )
@@ -758,26 +757,27 @@ def section_trends(
         if df_hist.empty:
             st.info("Aucune donnée dans la plage temporelle sélectionnée.")
         else:
-            # ── Calcul des streams estimés ─────────────────────────────
-            # Hypothèse métier : chaque follower génère en moyenne
-            # 12,5 streams par période (benchmark industrie indé 2024).
+            # Streams estimés : 12,5 streams/follower (benchmark indé 2024)
             df_hist["streams_estimated"] = df_hist["followers_count"] * 12.5
 
-            # ── Rééchantillonnage Pandas selon la granularité choisie ──
+            # Rééchantillonnage selon la granularité choisie
             alias = _RESAMPLE_ALIAS[granularity]
-            df_hist = df_hist.set_index("date_enregistrement")
-            df_resampled = df_hist.resample(alias).agg({
-                "streams_estimated": "sum",    # Cumul des streams sur la période
-                "popularity_score":  "mean",   # Score moyen sur la période
-            }).dropna().reset_index()
-            df_resampled.rename(
-                columns={"date_enregistrement": "date"}, inplace=True
+            df_resampled = (
+                df_hist
+                .set_index("date_enregistrement")
+                .resample(alias)
+                .agg(
+                    streams_estimated=("streams_estimated", "sum"),
+                    popularity_score=("popularity_score", "mean"),
+                )
+                .dropna()
+                .reset_index()
+                .rename(columns={"date_enregistrement": "date"})
             )
 
-            # ── Construction du graphique dual-axe ────────────────────
             fig_line = go.Figure()
 
-            # Axe gauche — Streams (lime, remplissage rgba)
+            # Axe gauche — Streams (lime, zone remplie)
             fig_line.add_trace(go.Scatter(
                 x=df_resampled["date"],
                 y=df_resampled["streams_estimated"],
@@ -785,14 +785,14 @@ def section_trends(
                 name="Streams estimés",
                 line=dict(color=PALETTE["lime"], width=2.5),
                 fill="tozeroy",
-                fillcolor=_FILL_LIME,          # ← rgba valide, plus de hex+alpha
+                fillcolor=_FILL_LIME,
                 hovertemplate=(
                     "<b>%{x|%d %b %Y}</b><br>"
                     "Streams : <b>%{y:,.0f}</b><extra></extra>"
                 ),
             ))
 
-            # Axe droit — Score de popularité (purple, pointillé)
+            # Axe droit — Popularité (purple, pointillé)
             fig_line.add_trace(go.Scatter(
                 x=df_resampled["date"],
                 y=df_resampled["popularity_score"],
@@ -805,25 +805,37 @@ def section_trends(
                 ),
             ))
 
-            fig_line.update_layout(
-                **_plotly_layout(height=360),
-                yaxis=dict(
-                    title="Streams estimés",
-                    gridcolor=PALETTE["border"],
-                    tickfont=dict(color=PALETTE["muted"]),
-                ),
-                yaxis2=dict(
-                    title="Popularité /100",
-                    overlaying="y",
-                    side="right",
-                    range=[0, 100],
-                    showgrid=False,
-                    tickfont=dict(color=PALETTE["purple"]),
-                ),
-                legend=dict(
-                    orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0
-                ),
+            # ── Fusion du layout sans doublon de clé ──────────────────
+            # _plotly_layout() retourne déjà "legend", "yaxis" et "xaxis".
+            # On construit un seul dict avec {**base, clé: override} pour
+            # que Python ne reçoive jamais deux fois le même argument nommé
+            # → élimine le TypeError: keyword argument repeated.
+            _base = _plotly_layout(height=360)
+            _base["yaxis"] = dict(
+                title="Streams estimés",
+                gridcolor=PALETTE["border"],
+                linecolor=PALETTE["border"],
+                tickfont=dict(color=PALETTE["muted"], size=11),
             )
+            _base["yaxis2"] = dict(
+                title="Popularité /100",
+                overlaying="y",
+                side="right",
+                range=[0, 100],
+                showgrid=False,
+                tickfont=dict(color=PALETTE["purple"]),
+            )
+            _base["legend"] = dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="left",
+                x=0,
+                bgcolor="rgba(0,0,0,0)",
+                bordercolor=PALETTE["border"],
+                font=dict(size=11),
+            )
+            fig_line.update_layout(_base)       # ← un seul dict, zéro doublon
             st.plotly_chart(fig_line, use_container_width=True)
 
     # ── Radar Chart ───────────────────────────────────────────────────────
@@ -836,7 +848,7 @@ def section_trends(
         )
         profile = artist["audio_profile"]
         categories = list(profile.keys())
-        categories_closed = categories + [categories[0]]  # Fermer le polygone
+        categories_closed = categories + [categories[0]]   # Fermer le polygone
 
         artist_vals = list(profile.values())
         market_vals = [MARKET_REFERENCE[c] for c in categories]
@@ -847,7 +859,7 @@ def section_trends(
             r=[v * 100 for v in market_vals] + [market_vals[0] * 100],
             theta=categories_closed,
             fill="toself",
-            fillcolor=_FILL_MUTED,             # ← rgba valide
+            fillcolor=_FILL_MUTED,
             line=dict(color=PALETTE["muted"], width=1.5, dash="dot"),
             name="Standard marché",
         ))
@@ -856,7 +868,7 @@ def section_trends(
             r=[v * 100 for v in artist_vals] + [artist_vals[0] * 100],
             theta=categories_closed,
             fill="toself",
-            fillcolor=_FILL_RADAR,             # ← rgba valide
+            fillcolor=_FILL_RADAR,
             line=dict(color=PALETTE["lime"], width=2.5),
             name=artist["name"],
         ))

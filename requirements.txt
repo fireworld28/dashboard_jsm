@@ -1,0 +1,9 @@
+# Music Manager Dashboard — Dépendances Python
+# Installation : pip install -r requirements.txt
+
+streamlit>=1.35.0
+plotly>=5.22.0
+pandas>=2.2.0
+
+# Optionnel : seulement si vous basculez vers PostgreSQL / Supabase
+# psycopg2-binary>=2.9.9

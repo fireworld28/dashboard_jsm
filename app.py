@@ -705,6 +705,22 @@ def section_chansonometre(artist: dict) -> None:
 
 # ── Section 3 : Tendances temporelles ────────────────────────────────────
 
+# Correspondance label UI → alias Pandas resample
+_RESAMPLE_ALIAS: dict[str, str] = {
+    "Jour":   "D",
+    "Semaine": "W",
+    "Mois":   "ME",
+    "Année":  "YE",
+}
+
+# Couleurs RGBA standard (compatibles Plotly / Python 3.14+)
+# Lime  #C8F135  → rgb(200, 241, 53)
+# Muted #6B7280  → rgb(107, 114, 128)
+_FILL_LIME  = "rgba(200, 241, 53, 0.08)"   # remplace f"{PALETTE['lime']}18"
+_FILL_MUTED = "rgba(107, 114, 128, 0.12)"  # remplace f"{PALETTE['muted']}20"
+_FILL_RADAR = "rgba(200, 241, 53, 0.14)"   # remplace f"{PALETTE['lime']}25"
+
+
 def section_trends(
     artist: dict,
     date_from: date,
@@ -719,58 +735,85 @@ def section_trends(
 
     col_line, col_radar = st.columns([1.2, 1], gap="large")
 
-    # ── Line Chart depuis la DB ────────────────────────────────────────
+    # ── Line Chart : streams estimés depuis la DB ─────────────────────
     with col_line:
+        # En-tête + sélecteur de granularité sur la même ligne visuelle
         st.markdown(
             f"<div style='font-size:0.78rem;color:{PALETTE['muted']};font-weight:600;"
-            f"letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.5rem;'>"
-            f"📈 Évolution des Followers (base de données)</div>",
+            f"letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.3rem;'>"
+            f"📈 Streams estimés (base de données)</div>",
             unsafe_allow_html=True,
         )
+
+        granularity = st.radio(
+            label="Agrégation temporelle",
+            options=list(_RESAMPLE_ALIAS.keys()),
+            index=1,               # "Semaine" par défaut
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+
         df_hist = get_artist_history(artist["spotify_id"], date_from, date_to)
 
         if df_hist.empty:
             st.info("Aucune donnée dans la plage temporelle sélectionnée.")
         else:
+            # ── Calcul des streams estimés ─────────────────────────────
+            # Hypothèse métier : chaque follower génère en moyenne
+            # 12,5 streams par période (benchmark industrie indé 2024).
+            df_hist["streams_estimated"] = df_hist["followers_count"] * 12.5
+
+            # ── Rééchantillonnage Pandas selon la granularité choisie ──
+            alias = _RESAMPLE_ALIAS[granularity]
+            df_hist = df_hist.set_index("date_enregistrement")
+            df_resampled = df_hist.resample(alias).agg({
+                "streams_estimated": "sum",    # Cumul des streams sur la période
+                "popularity_score":  "mean",   # Score moyen sur la période
+            }).dropna().reset_index()
+            df_resampled.rename(
+                columns={"date_enregistrement": "date"}, inplace=True
+            )
+
+            # ── Construction du graphique dual-axe ────────────────────
             fig_line = go.Figure()
 
-            # Zone remplie
+            # Axe gauche — Streams (lime, remplissage rgba)
             fig_line.add_trace(go.Scatter(
-                x=df_hist["date_enregistrement"],
-                y=df_hist["followers_count"],
+                x=df_resampled["date"],
+                y=df_resampled["streams_estimated"],
                 mode="lines",
-                name="Followers",
+                name="Streams estimés",
                 line=dict(color=PALETTE["lime"], width=2.5),
                 fill="tozeroy",
-                fillcolor=f"{PALETTE['lime']}18",
+                fillcolor=_FILL_LIME,          # ← rgba valide, plus de hex+alpha
                 hovertemplate=(
                     "<b>%{x|%d %b %Y}</b><br>"
-                    "Followers : <b>%{y:,.0f}</b><extra></extra>"
+                    "Streams : <b>%{y:,.0f}</b><extra></extra>"
                 ),
             ))
 
-            # Popularité sur axe secondaire
+            # Axe droit — Score de popularité (purple, pointillé)
             fig_line.add_trace(go.Scatter(
-                x=df_hist["date_enregistrement"],
-                y=df_hist["popularity_score"],
+                x=df_resampled["date"],
+                y=df_resampled["popularity_score"],
                 mode="lines",
                 name="Popularité",
                 yaxis="y2",
                 line=dict(color=PALETTE["purple"], width=1.8, dash="dot"),
                 hovertemplate=(
-                    "Popularité : <b>%{y}</b>/100<extra></extra>"
+                    "Popularité : <b>%{y:.1f}</b>/100<extra></extra>"
                 ),
             ))
 
             fig_line.update_layout(
                 **_plotly_layout(height=360),
                 yaxis=dict(
-                    title="Followers",
+                    title="Streams estimés",
                     gridcolor=PALETTE["border"],
                     tickfont=dict(color=PALETTE["muted"]),
                 ),
                 yaxis2=dict(
-                    title="Popularité",
+                    title="Popularité /100",
                     overlaying="y",
                     side="right",
                     range=[0, 100],
@@ -804,7 +847,7 @@ def section_trends(
             r=[v * 100 for v in market_vals] + [market_vals[0] * 100],
             theta=categories_closed,
             fill="toself",
-            fillcolor=f"{PALETTE['muted']}20",
+            fillcolor=_FILL_MUTED,             # ← rgba valide
             line=dict(color=PALETTE["muted"], width=1.5, dash="dot"),
             name="Standard marché",
         ))
@@ -813,7 +856,7 @@ def section_trends(
             r=[v * 100 for v in artist_vals] + [artist_vals[0] * 100],
             theta=categories_closed,
             fill="toself",
-            fillcolor=f"{PALETTE['lime']}25",
+            fillcolor=_FILL_RADAR,             # ← rgba valide
             line=dict(color=PALETTE["lime"], width=2.5),
             name=artist["name"],
         ))

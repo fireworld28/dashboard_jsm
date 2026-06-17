@@ -473,9 +473,11 @@ def seed_fake_history(artist: dict) -> None:
             f"SELECT COUNT(*) FROM historique_artistes WHERE spotify_id = {_ph(db_type)}",
             (artist["spotify_id"],),
         )
-        if cur.fetchone()[0] > 0:
-            conn.close()
-            return   # Déjà seedé — rien à faire
+        count = cur.fetchone()[0]
+        conn.close()          # ← fermeture AVANT le return, libère le verrou SQLite
+
+        if count > 0:
+            return            # Déjà seedé — rien à faire
 
         import random as _rnd
         rng       = _rnd.Random(artist["spotify_id"])
@@ -499,9 +501,13 @@ def seed_fake_history(artist: dict) -> None:
                 popularity,
             ))
 
-        ph = _ph(db_type)
-        if db_type == "sqlite":
-            cur.executemany(
+        # Ouvrir une nouvelle connexion propre pour l'écriture
+        conn2, db_type2 = _get_connection()
+        cur2 = conn2.cursor()
+        ph   = _ph(db_type2)
+
+        if db_type2 == "sqlite":
+            cur2.executemany(
                 f"""INSERT OR REPLACE INTO historique_artistes
                     (date_enregistrement, artiste_name, spotify_id,
                      followers_count, popularity_score)
@@ -509,7 +515,7 @@ def seed_fake_history(artist: dict) -> None:
                 rows,
             )
         else:
-            cur.executemany(
+            cur2.executemany(
                 f"""INSERT INTO historique_artistes
                     (date_enregistrement, artiste_name, spotify_id,
                      followers_count, popularity_score)
@@ -521,8 +527,8 @@ def seed_fake_history(artist: dict) -> None:
                         popularity_score = EXCLUDED.popularity_score""",
                 rows,
             )
-        conn.commit()
-        conn.close()
+        conn2.commit()
+        conn2.close()
 
     except Exception:
         # Failsafe total : ne jamais crasher l'UI à cause du seeding
@@ -1110,8 +1116,10 @@ def main() -> None:
         else:
             st.session_state["last_artist"] = artist
 
-        # Garantir l'historique SYSTÉMATIQUEMENT — qu'il vienne de l'API
-        # ou du session_state. Appelé après le guard pour couvrir les deux cas.
+        # ── SEEDING IMMÉDIAT ──────────────────────────────────────────────
+        # Appelé ICI — après la résolution de l'artiste mais AVANT le filtre
+        # temporel et le compteur de lignes — pour garantir que les données
+        # sont en base avant que la sidebar n'affiche "N enregistrements".
         ensure_artist_has_history(artist)
 
         # ── Filtre temporel ───────────────────────────────────────────────

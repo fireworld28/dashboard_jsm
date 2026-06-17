@@ -17,6 +17,7 @@ Basculer vers PostgreSQL/Supabase :
 # ──────────────────────────────────────────────────────────────────────────
 # SECTION 1 — IMPORTS & CONFIGURATION GÉNÉRALE
 # ──────────────────────────────────────────────────────────────────────────
+import os
 import re
 import sqlite3
 from datetime import date, timedelta

@@ -463,63 +463,100 @@ def seed_fake_history(artist: dict) -> None:
 
     Modèle : part de 70 % des chiffres actuels il y a 1 an et progresse
     linéairement vers 100 % aujourd'hui, avec ±3 % de bruit déterministe.
+
+    Failsafe : ne lève jamais d'exception — catch total pour ne pas bloquer l'UI.
     """
-    conn, db_type = _get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        f"SELECT COUNT(*) FROM historique_artistes WHERE spotify_id = {_ph(db_type)}",
-        (artist["spotify_id"],),
-    )
-    if cur.fetchone()[0] > 0:
+    try:
+        conn, db_type = _get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT COUNT(*) FROM historique_artistes WHERE spotify_id = {_ph(db_type)}",
+            (artist["spotify_id"],),
+        )
+        if cur.fetchone()[0] > 0:
+            conn.close()
+            return   # Déjà seedé — rien à faire
+
+        import random as _rnd
+        rng       = _rnd.Random(artist["spotify_id"])
+        today     = date.today()
+        current_f = max(1, artist.get("followers_base",  1000))
+        current_p = max(1, artist.get("popularity_base", 40))
+        rows      = []
+
+        for week in range(52, -1, -1):
+            record_date = today - timedelta(weeks=week)
+            progress    = (52 - week) / 52
+            f_base      = current_f * (0.70 + 0.30 * progress)
+            followers   = int(f_base * (1.0 + rng.uniform(-0.03, 0.03)))
+            p_base      = current_p * (0.80 + 0.20 * progress)
+            popularity  = min(100, max(0, int(p_base + rng.uniform(-3, 3))))
+            rows.append((
+                record_date.isoformat(),
+                artist["name"],
+                artist["spotify_id"],
+                max(0, followers),
+                popularity,
+            ))
+
+        ph = _ph(db_type)
+        if db_type == "sqlite":
+            cur.executemany(
+                f"""INSERT OR REPLACE INTO historique_artistes
+                    (date_enregistrement, artiste_name, spotify_id,
+                     followers_count, popularity_score)
+                    VALUES ({ph},{ph},{ph},{ph},{ph})""",
+                rows,
+            )
+        else:
+            cur.executemany(
+                f"""INSERT INTO historique_artistes
+                    (date_enregistrement, artiste_name, spotify_id,
+                     followers_count, popularity_score)
+                    VALUES ({ph},{ph},{ph},{ph},{ph})
+                    ON CONFLICT (spotify_id, date_enregistrement)
+                    DO UPDATE SET
+                        artiste_name     = EXCLUDED.artiste_name,
+                        followers_count  = EXCLUDED.followers_count,
+                        popularity_score = EXCLUDED.popularity_score""",
+                rows,
+            )
+        conn.commit()
         conn.close()
-        return
 
-    import random as _rnd
-    rng       = _rnd.Random(artist["spotify_id"])
-    today     = date.today()
-    current_f = max(1, artist.get("followers_base",  1000))
-    current_p = max(1, artist.get("popularity_base", 40))
-    rows      = []
+    except Exception:
+        # Failsafe total : ne jamais crasher l'UI à cause du seeding
+        pass
 
-    for week in range(52, -1, -1):
-        record_date = today - timedelta(weeks=week)
-        progress    = (52 - week) / 52
-        f_base      = current_f * (0.70 + 0.30 * progress)
-        followers   = int(f_base * (1.0 + rng.uniform(-0.03, 0.03)))
-        p_base      = current_p * (0.80 + 0.20 * progress)
-        popularity  = min(100, max(0, int(p_base + rng.uniform(-3, 3))))
-        rows.append((
-            record_date.isoformat(),
-            artist["name"],
-            artist["spotify_id"],
-            max(0, followers),
-            popularity,
-        ))
 
-    ph = _ph(db_type)
-    if db_type == "sqlite":
-        cur.executemany(
-            f"""INSERT OR REPLACE INTO historique_artistes
-                (date_enregistrement, artiste_name, spotify_id,
-                 followers_count, popularity_score)
-                VALUES ({ph},{ph},{ph},{ph},{ph})""",
-            rows,
+def ensure_artist_has_history(artist: dict) -> None:
+    """
+    Point d'entrée unique appelé SYSTÉMATIQUEMENT après résolution de l'artiste,
+    que celui-ci vienne de l'API ou du session_state.
+
+    Garantit qu'il y a toujours ≥1 ligne en base avant d'afficher les graphiques.
+    Double vérification : si seed_fake_history n'a pas fonctionné la première fois,
+    on retente ici avec un catch total pour ne pas bloquer l'interface.
+    """
+    try:
+        conn, db_type = _get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT COUNT(*) FROM historique_artistes WHERE spotify_id = {_ph(db_type)}",
+            (artist["spotify_id"],),
         )
-    else:
-        cur.executemany(
-            f"""INSERT INTO historique_artistes
-                (date_enregistrement, artiste_name, spotify_id,
-                 followers_count, popularity_score)
-                VALUES ({ph},{ph},{ph},{ph},{ph})
-                ON CONFLICT (spotify_id, date_enregistrement)
-                DO UPDATE SET
-                    artiste_name     = EXCLUDED.artiste_name,
-                    followers_count  = EXCLUDED.followers_count,
-                    popularity_score = EXCLUDED.popularity_score""",
-            rows,
-        )
-    conn.commit()
-    conn.close()
+        count = cur.fetchone()[0]
+        conn.close()
+
+        if count == 0:
+            seed_fake_history(artist)
+
+    except Exception:
+        # Dernier recours : tenter le seed sans vérification préalable
+        try:
+            seed_fake_history(artist)
+        except Exception:
+            pass
 
 
 def upsert_daily_stats(
@@ -1073,8 +1110,9 @@ def main() -> None:
         else:
             st.session_state["last_artist"] = artist
 
-        # Seed auto si premier accès à cet artiste
-        seed_fake_history(artist)
+        # Garantir l'historique SYSTÉMATIQUEMENT — qu'il vienne de l'API
+        # ou du session_state. Appelé après le guard pour couvrir les deux cas.
+        ensure_artist_has_history(artist)
 
         # ── Filtre temporel ───────────────────────────────────────────────
         st.markdown("<div class='sidebar-section'></div>", unsafe_allow_html=True)

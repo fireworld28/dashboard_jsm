@@ -1,16 +1,15 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════╗
-║         MUSIC MANAGER DASHBOARD — Analyse de Performance Artiste         ║
-║         Auteur  : Digital Next / RBK Groupe                             ║
-║         Stack   : Streamlit · Plotly · SQLite (→ PostgreSQL ready)      ║
-║         API     : Spotify via Spotipy (Client Credentials Flow)         ║
+║   MUSIC MANAGER DASHBOARD — Moniteur Artiste Dédié                      ║
+║   Auteur  : Digital Next / RBK Groupe                                   ║
+║   Stack   : Streamlit · Plotly · SQLite (→ PostgreSQL ready)            ║
+║   API     : Spotify via Spotipy (Client Credentials Flow)               ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 
-Secrets Streamlit requis (.streamlit/secrets.toml ou Streamlit Cloud UI) :
-  SPOTIFY_CLIENT_ID     = "votre_client_id"
-  SPOTIFY_CLIENT_SECRET = "votre_client_secret"
+Architecture mono-artiste : l'ID Spotify de l'artiste suivi est hardcodé
+dans HARDCODED_ARTIST_ID. Toute l'app tourne autour de cet unique artiste.
 
-Basculer vers PostgreSQL/Supabase :
+Basculer vers PostgreSQL :
   export DATABASE_URL="postgresql://user:pass@host:5432/dbname"
 """
 
@@ -18,7 +17,6 @@ Basculer vers PostgreSQL/Supabase :
 # SECTION 1 — IMPORTS & CONFIGURATION GÉNÉRALE
 # ──────────────────────────────────────────────────────────────────────────
 import os
-import re
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
@@ -29,6 +27,24 @@ import plotly.graph_objects as go
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 import streamlit as st
+
+# ── Artiste cible (único) ─────────────────────────────────────────────────
+# Remplacer par l'ID Spotify de l'artiste à monitorer.
+HARDCODED_ARTIST_ID = "3iM09vBtAAd9477SgST6EA"   # Jul
+
+# ── Démographie audience (données privées non exposées par l'API Spotify) ─
+# Adapter ces valeurs à la connaissance réelle du manager.
+AUDIENCE_GENDER = {
+    "Hommes": 62,
+    "Femmes": 38,
+}
+AUDIENCE_AGE = {
+    "13–17":  8,
+    "18–24": 34,
+    "25–34": 31,
+    "35–44": 17,
+    "45+":   10,
+}
 
 st.set_page_config(
     page_title="Music Manager Dashboard",
@@ -51,7 +67,6 @@ PALETTE = {
     "chart_bg": "rgba(0,0,0,0)",
 }
 
-# RGBA overlays Plotly — jamais de hex 8-chars (Plotly validator Python 3.14)
 _FILL_LIME  = "rgba(200, 241,  53, 0.08)"
 _FILL_MUTED = "rgba(107, 114, 128, 0.12)"
 _FILL_RADAR = "rgba(200, 241,  53, 0.14)"
@@ -151,21 +166,6 @@ st.markdown(f"""
   .stButton > button:hover {{ opacity: 0.85; }}
   h1, h2, h3 {{ color: {PALETTE['text']}; }}
   [data-testid="stPlotlyChart"] {{ border-radius: 8px; overflow: hidden; }}
-  /* Badge de statut recherche */
-  .search-status-found {{
-      background: rgba(0,229,204,0.10);
-      border: 1px solid {PALETTE['teal']};
-      border-radius: 8px; padding: 0.5rem 0.8rem;
-      font-size: 0.78rem; color: {PALETTE['teal']};
-      margin-top: 0.4rem;
-  }}
-  .search-status-searching {{
-      background: rgba(200,241,53,0.08);
-      border: 1px solid {PALETTE['lime']};
-      border-radius: 8px; padding: 0.5rem 0.8rem;
-      font-size: 0.78rem; color: {PALETTE['lime']};
-      margin-top: 0.4rem;
-  }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -173,10 +173,6 @@ st.markdown(f"""
 # ══════════════════════════════════════════════════════════════════════════
 # SECTION 2 — COUCHE API SPOTIFY
 # ══════════════════════════════════════════════════════════════════════════
-
-_SPOTIFY_ARTIST_RE = re.compile(
-    r"(?:spotify:artist:|open\.spotify\.com/(?:intl-[a-z]{2}/)?artist/)([A-Za-z0-9]+)"
-)
 
 _AUDIO_KEY_MAP: dict[str, str] = {
     "acousticness":  "Acoustique",
@@ -186,7 +182,6 @@ _AUDIO_KEY_MAP: dict[str, str] = {
     "danceability":  "Dansabilité",
 }
 
-# Profil neutre utilisé uniquement si l'API échoue totalement
 _NEUTRAL_PROFILE: dict[str, float] = {
     "Acoustique":  0.30,
     "Liveness":    0.20,
@@ -201,24 +196,18 @@ def init_spotify():
     """
     Initialise le client Spotipy via Client Credentials Flow.
 
-    Stratégie de credentials (ordre de priorité) :
-      1. st.secrets["SPOTIFY_CLIENT_ID"] / st.secrets["SPOTIFY_CLIENT_SECRET"]
-         → Source de vérité sur Streamlit Cloud quand les secrets sont configurés.
-      2. Fallback hardcodé sur les credentials du compte Digital Next
-         → Garantit que l'app se connecte même si les secrets ne s'injectent pas.
-
-    En cas d'échec d'authentification, affiche une erreur explicite et stoppe.
+    Priorité :
+      1. st.secrets["SPOTIFY_CLIENT_ID"] / ["SPOTIFY_CLIENT_SECRET"]
+      2. Fallback hardcodé — garantit la connexion même si les secrets
+         Streamlit Cloud ne s'injectent pas correctement.
     """
-    # ── 1. Tenter les secrets Streamlit (priorité) ────────────────────────
     try:
         client_id     = st.secrets["SPOTIFY_CLIENT_ID"]
         client_secret = st.secrets["SPOTIFY_CLIENT_SECRET"]
     except (KeyError, AttributeError, Exception):
-        # Secrets absents ou Streamlit Cloud non configuré → fallback
         client_id     = "159"
         client_secret = "2fe"
 
-    # ── 2. Construire et retourner le client ──────────────────────────────
     try:
         return spotipy.Spotify(
             auth_manager=SpotifyClientCredentials(
@@ -229,73 +218,22 @@ def init_spotify():
     except Exception as exc:
         st.error(
             f"**\u00c9chec de connexion Spotify.**\n\n"
-            f"V\u00e9rifiez vos credentials dans les Streamlit Secrets.\n\n"
-            f"D\u00e9tail\u00a0: `{exc}`"
+            f"V\u00e9rifiez vos credentials.\n\n`{exc}`"
         )
         st.stop()
 
 
-def _extract_artist_id(query: str) -> str | None:
-    """Retourne l'artist ID si query est une URL/URI Spotify, sinon None."""
-    m = _SPOTIFY_ARTIST_RE.search(query.strip())
-    return m.group(1) if m else None
-
-
-@st.cache_data(ttl=120, show_spinner=False)
-def search_artists_live(query: str) -> list[dict]:
-    """
-    Recherche les 5 artistes Spotify les plus proches pour la saisie `query`.
-
-    Retourne une liste de dicts légers :
-      { "label": "Nom (genres, N followers)", "spotify_id": "...", "name": "..." }
-
-    Mis en cache 2 min (ttl=120) — assez court pour rester réactif à la frappe,
-    assez long pour éviter de saturer le quota sur chaque keystroke.
-    """
-    sp = init_spotify()
-    if not query.strip():
-        return []
-
-    try:
-        results = sp.search(q=query.strip(), type="artist", limit=5)
-        items   = results.get("artists", {}).get("items", [])
-        out = []
-        for item in items:
-            followers = item.get("followers", {}).get("total", 0)
-            genres    = item.get("genres", [])[:2]
-            genre_str = f" · {', '.join(genres)}" if genres else ""
-            label     = f"{item['name']}{genre_str} · {followers:,} followers"
-            out.append({
-                "label":      label,
-                "spotify_id": item["id"],
-                "name":       item["name"],
-            })
-        return out
-    except Exception:
-        return []
-
-
 @st.cache_data(ttl=900, show_spinner=False)
-def resolve_artist(query: str) -> dict | None:
+def resolve_artist(spotify_id: str) -> dict | None:
     """
-    Résout texte libre ou URL/URI → dict artiste unifié.
+    Résout un Spotify artist ID → dict artiste unifié.
 
     Clés : name, spotify_id, genre, followers_base, popularity_base,
-           photo_url, audio_profile (vide, à remplir par fetch_audio_profile)
+           photo_url, audio_profile (vide)
     """
     sp = init_spotify()
-
     try:
-        artist_id = _extract_artist_id(query)
-        data = sp.artist(artist_id) if artist_id else None
-
-        if data is None:
-            results = sp.search(q=query.strip(), type="artist", limit=1)
-            items   = results.get("artists", {}).get("items", [])
-            if not items:
-                return None
-            data = items[0]
-
+        data      = sp.artist(spotify_id)
         images    = data.get("images", [])
         photo_url = images[0]["url"] if images else (
             f"https://via.placeholder.com/150/"
@@ -304,7 +242,6 @@ def resolve_artist(query: str) -> dict | None:
         )
         genres      = data.get("genres", [])
         genre_label = " / ".join(g.title() for g in genres[:2]) if genres else "N/A"
-
         return {
             "name":            data["name"],
             "spotify_id":      data["id"],
@@ -321,37 +258,25 @@ def resolve_artist(query: str) -> dict | None:
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_audio_profile(spotify_id: str) -> dict:
     """
-    Calcule la moyenne réelle des 5 dimensions audio depuis les top tracks.
-    Aucune valeur aléatoire — fallback sur profil neutre fixe si l'API échoue.
-
-    Pipeline :
-      sp.artist_top_tracks(spotify_id, country="FR")
-      → sp.audio_features(track_ids)
-      → moyenne arithmétique par dimension (acousticness, energy, etc.)
-      → dict {label_fr: float 0.0–1.0}
+    Moyenne réelle des 5 dimensions audio depuis les top tracks (FR).
+    Fallback sur profil neutre si l'API échoue.
     """
     sp = init_spotify()
-
     try:
         top       = sp.artist_top_tracks(spotify_id, country="FR")
         track_ids = [t["id"] for t in top.get("tracks", [])[:10] if t.get("id")]
-
         if not track_ids:
             return dict(_NEUTRAL_PROFILE)
-
         raw      = sp.audio_features(track_ids) or []
         features = [f for f in raw if f and isinstance(f, dict)]
-
         if not features:
             return dict(_NEUTRAL_PROFILE)
-
         return {
             fr_label: round(
                 sum(f[sp_key] for f in features if sp_key in f) / len(features), 3
             )
             for sp_key, fr_label in _AUDIO_KEY_MAP.items()
         }
-
     except Exception:
         return dict(_NEUTRAL_PROFILE)
 
@@ -359,51 +284,38 @@ def fetch_audio_profile(spotify_id: str) -> dict:
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_top_tracks_df(spotify_id: str) -> pd.DataFrame:
     """
-    Retourne le Top 10 réel depuis l'API Spotify.
-
-    Colonnes : Titre | Popularité | Album | Sortie | Énergie | Dansabilité | Durée
-
-    Aucune génération aléatoire de titres fictifs.
-    En cas d'échec API, retourne un DataFrame vide avec les mêmes colonnes.
+    Top 10 réel de l'artiste (FR) avec audio features.
+    Retourne un DataFrame vide si l'API est indisponible.
     """
     _COLS = ["\U0001f3b5  Titre", "Popularité", "Album", "Sortie",
              "Énergie", "Dansabilité", "Durée"]
-
     sp = init_spotify()
-
     try:
         top       = sp.artist_top_tracks(spotify_id, country="FR")
         tracks    = top.get("tracks", [])[:10]
         track_ids = [t["id"] for t in tracks if t.get("id")]
-
-        raw      = sp.audio_features(track_ids) or []
-        feat_map = {f["id"]: f for f in raw if f and isinstance(f, dict)}
-
+        raw       = sp.audio_features(track_ids) or []
+        feat_map  = {f["id"]: f for f in raw if f and isinstance(f, dict)}
         rows = []
         for t in tracks:
             f          = feat_map.get(t["id"], {})
             ms         = t.get("duration_ms", 0)
             mn, sc     = divmod(ms // 1000, 60)
             album      = t.get("album", {})
-            album_name = album.get("name", "—")
-            release    = album.get("release_date", "—")[:4]   # année seulement
             rows.append({
-                "🎵  Titre":   t["name"],
-                "Popularité":  t["popularity"],
-                "Album":       album_name,
-                "Sortie":      release,
-                "Énergie":     round(f.get("energy",       0.0), 2),
-                "Dansabilité": round(f.get("danceability",  0.0), 2),
-                "Durée":       f"{mn}:{sc:02d}",
+                "\U0001f3b5  Titre": t["name"],
+                "Popularité":        t["popularity"],
+                "Album":             album.get("name", "\u2014"),
+                "Sortie":            album.get("release_date", "\u2014")[:4],
+                "Énergie":           round(f.get("energy",      0.0), 2),
+                "Dansabilité":       round(f.get("danceability", 0.0), 2),
+                "Durée":             f"{mn}:{sc:02d}",
             })
-
         if not rows:
             return pd.DataFrame(columns=_COLS)
-
         df       = pd.DataFrame(rows)
         df.index = range(1, len(df) + 1)
         return df
-
     except Exception:
         return pd.DataFrame(columns=_COLS)
 
@@ -437,7 +349,6 @@ def _ph(db_type: str) -> str:
 def init_db() -> None:
     """
     Crée la table historique_artistes avec contrainte UNIQUE(spotify_id, date).
-    Cette contrainte est le fondement de l'UPSERT anti-doublon.
     Idempotente — appelée à chaque démarrage.
     """
     conn, _ = _get_connection()
@@ -458,27 +369,28 @@ def init_db() -> None:
 
 def seed_fake_history(artist: dict) -> None:
     """
-    Insère 52 semaines d'historique progressif si l'artiste n'a aucune entrée.
-    Basé sur les chiffres API réels (followers_base, popularity_base).
+    Génère 52 semaines d'historique progressif si l'artiste n'en a aucun.
+    Modèle : 70 % → 100 % des chiffres actuels sur 1 an, bruit déterministe.
+    Failsafe total — ne lève jamais d'exception vers l'UI.
 
-    Modèle : part de 70 % des chiffres actuels il y a 1 an et progresse
-    linéairement vers 100 % aujourd'hui, avec ±3 % de bruit déterministe.
-
-    Failsafe : ne lève jamais d'exception — catch total pour ne pas bloquer l'UI.
+    Utilise deux connexions SQLite séparées (lecture puis écriture)
+    pour éviter les verrous WAL qui bloquaient silencieusement les INSERTs.
     """
     try:
-        conn, db_type = _get_connection()
-        cur = conn.cursor()
-        cur.execute(
+        # ── Lecture : y a-t-il déjà des données ? ────────────────────────
+        conn_r, db_type = _get_connection()
+        cur_r = conn_r.cursor()
+        cur_r.execute(
             f"SELECT COUNT(*) FROM historique_artistes WHERE spotify_id = {_ph(db_type)}",
             (artist["spotify_id"],),
         )
-        count = cur.fetchone()[0]
-        conn.close()          # ← fermeture AVANT le return, libère le verrou SQLite
+        count = cur_r.fetchone()[0]
+        conn_r.close()   # libère le verrou de lecture AVANT d'écrire
 
         if count > 0:
-            return            # Déjà seedé — rien à faire
+            return       # déjà seedé
 
+        # ── Génération des lignes ─────────────────────────────────────────
         import random as _rnd
         rng       = _rnd.Random(artist["spotify_id"])
         today     = date.today()
@@ -489,10 +401,11 @@ def seed_fake_history(artist: dict) -> None:
         for week in range(52, -1, -1):
             record_date = today - timedelta(weeks=week)
             progress    = (52 - week) / 52
-            f_base      = current_f * (0.70 + 0.30 * progress)
-            followers   = int(f_base * (1.0 + rng.uniform(-0.03, 0.03)))
-            p_base      = current_p * (0.80 + 0.20 * progress)
-            popularity  = min(100, max(0, int(p_base + rng.uniform(-3, 3))))
+            followers   = int(current_f * (0.70 + 0.30 * progress)
+                             * (1.0 + rng.uniform(-0.03, 0.03)))
+            popularity  = min(100, max(0, int(
+                current_p * (0.80 + 0.20 * progress) + rng.uniform(-3, 3)
+            )))
             rows.append((
                 record_date.isoformat(),
                 artist["name"],
@@ -501,13 +414,13 @@ def seed_fake_history(artist: dict) -> None:
                 popularity,
             ))
 
-        # Ouvrir une nouvelle connexion propre pour l'écriture
-        conn2, db_type2 = _get_connection()
-        cur2 = conn2.cursor()
-        ph   = _ph(db_type2)
+        # ── Écriture : nouvelle connexion propre ──────────────────────────
+        conn_w, db_type_w = _get_connection()
+        cur_w = conn_w.cursor()
+        ph    = _ph(db_type_w)
 
-        if db_type2 == "sqlite":
-            cur2.executemany(
+        if db_type_w == "sqlite":
+            cur_w.executemany(
                 f"""INSERT OR REPLACE INTO historique_artistes
                     (date_enregistrement, artiste_name, spotify_id,
                      followers_count, popularity_score)
@@ -515,7 +428,7 @@ def seed_fake_history(artist: dict) -> None:
                 rows,
             )
         else:
-            cur2.executemany(
+            cur_w.executemany(
                 f"""INSERT INTO historique_artistes
                     (date_enregistrement, artiste_name, spotify_id,
                      followers_count, popularity_score)
@@ -527,22 +440,18 @@ def seed_fake_history(artist: dict) -> None:
                         popularity_score = EXCLUDED.popularity_score""",
                 rows,
             )
-        conn2.commit()
-        conn2.close()
+        conn_w.commit()
+        conn_w.close()
 
     except Exception:
-        # Failsafe total : ne jamais crasher l'UI à cause du seeding
-        pass
+        pass  # failsafe — jamais de crash UI à cause du seeding
 
 
 def ensure_artist_has_history(artist: dict) -> None:
     """
-    Point d'entrée unique appelé SYSTÉMATIQUEMENT après résolution de l'artiste,
-    que celui-ci vienne de l'API ou du session_state.
-
-    Garantit qu'il y a toujours ≥1 ligne en base avant d'afficher les graphiques.
-    Double vérification : si seed_fake_history n'a pas fonctionné la première fois,
-    on retente ici avec un catch total pour ne pas bloquer l'interface.
+    Vérifie qu'il y a ≥ 1 ligne en base pour cet artiste.
+    Si non, lance seed_fake_history(). Double retry en cas d'erreur.
+    Appelée immédiatement après resolve_artist() dans main().
     """
     try:
         conn, db_type = _get_connection()
@@ -553,12 +462,9 @@ def ensure_artist_has_history(artist: dict) -> None:
         )
         count = cur.fetchone()[0]
         conn.close()
-
         if count == 0:
             seed_fake_history(artist)
-
     except Exception:
-        # Dernier recours : tenter le seed sans vérification préalable
         try:
             seed_fake_history(artist)
         except Exception:
@@ -573,16 +479,13 @@ def upsert_daily_stats(
     record_date:      date | None = None,
 ) -> None:
     """
-    UPSERT quotidien : INSERT ou UPDATE de la ligne du jour.
-    Cliquer N fois le bouton dans la même journée ne crée jamais qu'une ligne.
-    Élimine les pics verticaux artificiels sur le graphique temporel.
+    INSERT OR REPLACE de la stat du jour.
+    Cliquer N fois = toujours 1 seule ligne → zéro spike vertical sur le graphe.
     """
     if record_date is None:
         record_date = date.today()
-
     conn, db_type = _get_connection()
     ph = _ph(db_type)
-
     if db_type == "sqlite":
         conn.execute(
             f"""INSERT OR REPLACE INTO historique_artistes
@@ -629,8 +532,7 @@ def get_artist_history(
         query  += f" AND date_enregistrement <= {ph}"
         params.append(date_to.isoformat())
     query += " ORDER BY date_enregistrement ASC"
-
-    df      = pd.read_sql_query(query, conn, params=params)
+    df    = pd.read_sql_query(query, conn, params=params)
     conn.close()
     df["date_enregistrement"] = pd.to_datetime(df["date_enregistrement"])
     return df
@@ -673,34 +575,27 @@ def get_previous_stats(spotify_id: str) -> dict | None:
 def _plotly_layout(title: str = "", height: int = 320) -> dict:
     """
     Dict de base pour fig.update_layout().
-
-    Pattern sûr (zéro TypeError Python 3.14+) :
-      layout = _plotly_layout(height=360)
-      layout.update({"yaxis": {...}, "yaxis2": {...}, "legend": {...}})
-      fig.update_layout(layout)
+    Utiliser layout.update({...}) puis fig.update_layout(layout)
+    pour éviter le TypeError doublon de clé sur Python 3.14+.
     """
     return {
         "paper_bgcolor": PALETTE["chart_bg"],
         "plot_bgcolor":  PALETTE["chart_bg"],
         "font":   dict(family="Inter, Segoe UI, sans-serif",
                        color=PALETTE["text"], size=12),
-        "title":  dict(text=title,
-                       font=dict(size=14, color=PALETTE["text"]), x=0),
+        "title":  dict(text=title, font=dict(size=14, color=PALETTE["text"]), x=0),
         "height": height,
         "margin": dict(l=16, r=16, t=40 if title else 16, b=16),
         "legend": dict(bgcolor="rgba(0,0,0,0)",
-                       bordercolor=PALETTE["border"],
-                       font=dict(size=11)),
-        "xaxis":  dict(gridcolor=PALETTE["border"],
-                       linecolor=PALETTE["border"],
+                       bordercolor=PALETTE["border"], font=dict(size=11)),
+        "xaxis":  dict(gridcolor=PALETTE["border"], linecolor=PALETTE["border"],
                        tickfont=dict(color=PALETTE["muted"], size=11)),
-        "yaxis":  dict(gridcolor=PALETTE["border"],
-                       linecolor=PALETTE["border"],
+        "yaxis":  dict(gridcolor=PALETTE["border"], linecolor=PALETTE["border"],
                        tickfont=dict(color=PALETTE["muted"], size=11)),
     }
 
 
-# ── Section 1 : Head-Up Display ──────────────────────────────────────────
+# ── Section 1 : Head-Up Display ───────────────────────────────────────────
 
 def section_hud(artist: dict) -> None:
     st.markdown("""
@@ -772,12 +667,118 @@ def section_hud(artist: dict) -> None:
         """, unsafe_allow_html=True)
 
 
-# ── Section 2 : Le Chansonomètre ─────────────────────────────────────────
+# ── Section 2 : Démographie Audience ─────────────────────────────────────
+
+def section_audience_demographics(artist: dict) -> None:
+    """
+    Visualise la démographie de l'audience de l'artiste.
+    Les données (genre, âge) sont hardcodées dans AUDIENCE_GENDER et AUDIENCE_AGE
+    car l'API Spotify ne les expose pas publiquement.
+    """
+    st.markdown("""
+        <div class='section-card'>
+          <div class='section-label'>Section 02</div>
+          <div class='section-title'>Démographie de l'Audience</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    col_gender, col_age = st.columns([1, 1.6], gap="large")
+
+    # ── Donut : répartition genre ─────────────────────────────────────────
+    with col_gender:
+        st.markdown(
+            f"<div style='font-size:0.78rem;color:{PALETTE['muted']};font-weight:600;"
+            f"letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.5rem;'>"
+            f"\U0001f464 Répartition Genre</div>",
+            unsafe_allow_html=True,
+        )
+        labels = list(AUDIENCE_GENDER.keys())
+        values = list(AUDIENCE_GENDER.values())
+
+        fig_donut = go.Figure(go.Pie(
+            labels=labels,
+            values=values,
+            hole=0.60,
+            marker=dict(
+                colors=[PALETTE["lime"], PALETTE["purple"]],
+                line=dict(color=PALETTE["bg"], width=3),
+            ),
+            textfont=dict(color=PALETTE["text"], size=13, family="Inter"),
+            textinfo="label+percent",
+            hovertemplate="<b>%{label}</b><br>%{value} %<extra></extra>",
+        ))
+
+        # Annotation centrale
+        fig_donut.update_layout(
+            **_plotly_layout(height=300),
+            showlegend=False,
+            annotations=[dict(
+                text=f"<b>{artist['name'].split()[0]}</b><br><span style='font-size:11px'>Audience</span>",
+                x=0.5, y=0.5, font_size=14, font_color=PALETTE["text"],
+                showarrow=False,
+            )],
+        )
+        st.plotly_chart(fig_donut, use_container_width=True)
+
+    # ── Bar chart horizontal : distribution par âge ───────────────────────
+    with col_age:
+        st.markdown(
+            f"<div style='font-size:0.78rem;color:{PALETTE['muted']};font-weight:600;"
+            f"letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.5rem;'>"
+            f"\U0001f4ca Distribution par Tranche d'Âge</div>",
+            unsafe_allow_html=True,
+        )
+        age_labels = list(AUDIENCE_AGE.keys())
+        age_values = list(AUDIENCE_AGE.values())
+
+        # Dégradé de couleur lime → purple selon la tranche
+        n = len(age_labels)
+        bar_colors = [
+            f"rgba({int(200 - (200 - 155) * i / (n - 1))}, "
+            f"{int(241 - (241 - 109) * i / (n - 1))}, "
+            f"{int(53  + (255 -  53) * i / (n - 1))}, 0.85)"
+            for i in range(n)
+        ]
+
+        fig_age = go.Figure(go.Bar(
+            y=age_labels,
+            x=age_values,
+            orientation="h",
+            marker=dict(
+                color=bar_colors,
+                line=dict(color=PALETTE["bg"], width=1),
+            ),
+            text=[f"{v} %" for v in age_values],
+            textposition="inside",
+            textfont=dict(color=PALETTE["bg"], size=12, family="Inter"),
+            hovertemplate="<b>%{y}</b><br>%{x} %<extra></extra>",
+        ))
+
+        layout_age = _plotly_layout(height=300)
+        layout_age.update({
+            "xaxis": dict(
+                title="% de l'audience",
+                range=[0, max(age_values) * 1.15],
+                gridcolor=PALETTE["border"],
+                tickfont=dict(color=PALETTE["muted"], size=11),
+            ),
+            "yaxis": dict(
+                autorange="reversed",
+                tickfont=dict(color=PALETTE["text"], size=12),
+                gridcolor=PALETTE["border"],
+            ),
+            "bargap": 0.25,
+        })
+        fig_age.update_layout(layout_age)
+        st.plotly_chart(fig_age, use_container_width=True)
+
+
+# ── Section 3 : Le Chansonomètre ─────────────────────────────────────────
 
 def section_chansonometre(artist: dict) -> None:
     st.markdown("""
         <div class='section-card'>
-          <div class='section-label'>Section 02</div>
+          <div class='section-label'>Section 03</div>
           <div class='section-title'>Le Chansonomètre — Analyse du Catalogue</div>
         </div>
     """, unsafe_allow_html=True)
@@ -793,7 +794,7 @@ def section_chansonometre(artist: dict) -> None:
             unsafe_allow_html=True,
         )
         if top10.empty:
-            st.info("Données Spotify non disponibles pour le moment.")
+            st.info("Données Spotify non disponibles.")
         else:
             st.dataframe(
                 top10,
@@ -812,17 +813,17 @@ def section_chansonometre(artist: dict) -> None:
         st.markdown(
             f"<div style='font-size:0.78rem;color:{PALETTE['muted']};font-weight:600;"
             f"letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.5rem;'>"
-            f"\U0001f4ca Énergie \u00d7 Dansabilité (taille = popularité)</div>",
+            f"\U0001f4ca Énergie \u00d7 Dansabilité</div>",
             unsafe_allow_html=True,
         )
         if top10.empty:
-            st.info("Données Spotify non disponibles pour le moment.")
+            st.info("Données Spotify non disponibles.")
         else:
             fig = px.scatter(
                 top10.reset_index().rename(columns={"index": "Rang"}),
                 x="Énergie", y="Dansabilité",
                 size="Popularité", color="Popularité",
-                hover_name="🎵  Titre",
+                hover_name="\U0001f3b5  Titre",
                 hover_data={"Album": True, "Sortie": True},
                 color_continuous_scale=[
                     [0,   PALETTE["purple"]],
@@ -833,13 +834,11 @@ def section_chansonometre(artist: dict) -> None:
             )
             fig.update_layout(**_plotly_layout(height=360))
             fig.update_coloraxes(showscale=False)
-            fig.update_traces(
-                marker=dict(line=dict(color=PALETTE["bg"], width=1.5))
-            )
+            fig.update_traces(marker=dict(line=dict(color=PALETTE["bg"], width=1.5)))
             st.plotly_chart(fig, use_container_width=True)
 
 
-# ── Section 3 : Tendances temporelles ────────────────────────────────────
+# ── Section 4 : Tendances temporelles ────────────────────────────────────
 
 def section_trends(
     artist:    dict,
@@ -848,7 +847,7 @@ def section_trends(
 ) -> None:
     st.markdown("""
         <div class='section-card'>
-          <div class='section-label'>Section 03</div>
+          <div class='section-label'>Section 04</div>
           <div class='section-title'>Vision Temporelle — Court terme vs. Long terme</div>
         </div>
     """, unsafe_allow_html=True)
@@ -862,7 +861,6 @@ def section_trends(
             f"\U0001f4c8 Streams estimés (base de données)</div>",
             unsafe_allow_html=True,
         )
-
         granularity = st.radio(
             label="Agrégation",
             options=list(_RESAMPLE_ALIAS.keys()),
@@ -870,15 +868,12 @@ def section_trends(
             horizontal=True,
             label_visibility="collapsed",
         )
-
         df_hist = get_artist_history(artist["spotify_id"], date_from, date_to)
 
         if df_hist.empty:
             st.info("Aucune donnée dans la plage temporelle sélectionnée.")
         else:
-            # Calcul des streams estimés : 12,5 streams / follower (benchmark indé)
             df_hist["streams_estimated"] = df_hist["followers_count"] * 12.5
-
             alias = _RESAMPLE_ALIAS[granularity]
             df_r  = (
                 df_hist
@@ -929,7 +924,6 @@ def section_trends(
                 hovertemplate="Popularité\u00a0: <b>%{y:.1f}</b>/100<extra></extra>",
             ))
 
-            # Fusion sûre du layout — dict.update() avant l'appel unique
             layout = _plotly_layout(height=360)
             layout.update({
                 "yaxis": dict(
@@ -945,12 +939,10 @@ def section_trends(
                     tickfont=dict(color=PALETTE["purple"]),
                 ),
                 "legend": dict(
-                    orientation="h",
-                    yanchor="bottom", y=1.02,
-                    xanchor="left",   x=0,
+                    orientation="h", yanchor="bottom", y=1.02,
+                    xanchor="left", x=0,
                     bgcolor="rgba(0,0,0,0)",
-                    bordercolor=PALETTE["border"],
-                    font=dict(size=11),
+                    bordercolor=PALETTE["border"], font=dict(size=11),
                 ),
             })
             fig_line.update_layout(layout)
@@ -963,12 +955,11 @@ def section_trends(
             f"\U0001f578\ufe0f Profil Audio vs. Marché</div>",
             unsafe_allow_html=True,
         )
-
         profile         = artist.get("audio_profile") or _NEUTRAL_PROFILE
         categories      = list(MARKET_REFERENCE.keys())
         categories_loop = categories + [categories[0]]
-        artist_vals     = [profile.get(c, 0.5)   for c in categories]
-        market_vals     = [MARKET_REFERENCE[c]    for c in categories]
+        artist_vals     = [profile.get(c, 0.5)  for c in categories]
+        market_vals     = [MARKET_REFERENCE[c]   for c in categories]
 
         fig_radar = go.Figure()
         fig_radar.add_trace(go.Scatterpolar(
@@ -991,13 +982,11 @@ def section_trends(
                 radialaxis=dict(
                     visible=True, range=[0, 100],
                     tickfont=dict(color=PALETTE["muted"], size=9),
-                    gridcolor=PALETTE["border"],
-                    linecolor=PALETTE["border"],
+                    gridcolor=PALETTE["border"], linecolor=PALETTE["border"],
                 ),
                 angularaxis=dict(
                     tickfont=dict(color=PALETTE["text"], size=11),
-                    linecolor=PALETTE["border"],
-                    gridcolor=PALETTE["border"],
+                    linecolor=PALETTE["border"], gridcolor=PALETTE["border"],
                 ),
             ),
             paper_bgcolor=PALETTE["chart_bg"],
@@ -1005,11 +994,9 @@ def section_trends(
             height=360,
             margin=dict(l=30, r=30, t=30, b=30),
             legend=dict(
-                orientation="h",
-                yanchor="bottom", y=-0.15,
+                orientation="h", yanchor="bottom", y=-0.15,
                 xanchor="center", x=0.5,
-                font=dict(size=11),
-                bgcolor="rgba(0,0,0,0)",
+                font=dict(size=11), bgcolor="rgba(0,0,0,0)",
             ),
         )
         st.plotly_chart(fig_radar, use_container_width=True)
@@ -1020,10 +1007,30 @@ def section_trends(
 # ══════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
+    # ── 5.1  Init DB ──────────────────────────────────────────────────────
     init_db()
 
+    # ── 5.2  Résolution artiste & seeding IMMÉDIAT ────────────────────────
+    # L'artiste est résolu UNE SEULE FOIS (hardcodé) et le seeding est
+    # exécuté AVANT toute construction de la sidebar ou des métriques,
+    # garantissant que le compteur "N enregistrements" voit les lignes.
+    artist = resolve_artist(HARDCODED_ARTIST_ID)
+
+    if artist is None:
+        st.error(
+            f"Impossible de charger l'artiste `{HARDCODED_ARTIST_ID}` depuis Spotify.\n\n"
+            "Vérifiez que l'ID est correct et que vos credentials API sont valides."
+        )
+        st.stop()
+
+    # Profil audio réel (mis en cache 15 min)
+    artist["audio_profile"] = fetch_audio_profile(artist["spotify_id"])
+
+    # Seeding immédiat — AVANT la sidebar, AVANT le compteur de lignes
+    ensure_artist_has_history(artist)
+
+    # ── 5.3  SIDEBAR ──────────────────────────────────────────────────────
     with st.sidebar:
-        # ── En-tête sidebar ───────────────────────────────────────────────
         st.markdown(f"""
             <div style="padding:0.5rem 0 1rem;">
               <div style="font-size:0.65rem;font-weight:700;letter-spacing:0.15em;
@@ -1036,91 +1043,18 @@ def main() -> None:
             </div>
         """, unsafe_allow_html=True)
 
-        # ── Recherche prédictive artiste ──────────────────────────────────
-        st.markdown(
-            f"<div class='sidebar-label'>\U0001f50d Recherche artiste</div>",
-            unsafe_allow_html=True,
-        )
-
-        # Champ de saisie libre — chaque frappe déclenche une recherche live
-        query = st.text_input(
-            label="Taper le nom d'un artiste\u2026",
-            value=st.session_state.get("search_query", "Jul"),
-            label_visibility="collapsed",
-            placeholder="Nom ou lien Spotify\u2026",
-            key="search_query",
-        )
-
-        artist = None
-
-        if query.strip():
-            # Détecter si c'est une URL/URI directe → lookup immédiat, pas de selectbox
-            direct_id = _extract_artist_id(query)
-
-            if direct_id:
-                with st.spinner("\U0001f50d Chargement de l'artiste\u2026"):
-                    artist = resolve_artist(direct_id)
-                if artist:
-                    st.toast(
-                        f"\u2705 **{artist['name']}** charg\u00e9",
-                        icon="\U0001f3b5",
-                    )
-
-            else:
-                # Recherche live : top 5 correspondances
-                candidates = search_artists_live(query)
-
-                if candidates:
-                    # Selectbox prédictif : l'utilisateur choisit parmi les 5 résultats
-                    labels       = [c["label"] for c in candidates]
-                    label_to_id  = {c["label"]: c["spotify_id"] for c in candidates}
-
-                    selected_label = st.selectbox(
-                        label="Sélectionner un artiste",
-                        options=labels,
-                        index=0,
-                        label_visibility="collapsed",
-                        key="artist_selectbox",
-                    )
-
-                    selected_id = label_to_id[selected_label]
-
-                    # Charger le profil complet de l'artiste sélectionné
-                    # (résolution mise en cache 15 min par spotify_id)
-                    with st.spinner("Chargement du profil\u2026"):
-                        artist = resolve_artist(selected_id)
-
-                    if artist:
-                        st.toast(
-                            f"\u2705 **{artist['name']}** s\u00e9lectionn\u00e9",
-                            icon="\U0001f3b5",
-                        )
-                else:
-                    st.caption("\u2753 Aucun r\u00e9sultat — essayez un autre nom.")
-
-        # Profil audio (mis en cache : n'appelle l'API qu'une fois par artiste)
-        if artist is not None:
-            with st.spinner("Analyse audio\u2026"):
-                artist["audio_profile"] = fetch_audio_profile(artist["spotify_id"])
-
-        # Guard : conserver le dernier artiste valide entre les reruns
-        if artist is None:
-            if "last_artist" in st.session_state:
-                artist = st.session_state["last_artist"]
-            else:
-                st.info(
-                    "Tapez un nom d'artiste dans le champ ci-dessus\n"
-                    "pour commencer l'analyse."
-                )
-                st.stop()
-        else:
-            st.session_state["last_artist"] = artist
-
-        # ── SEEDING IMMÉDIAT ──────────────────────────────────────────────
-        # Appelé ICI — après la résolution de l'artiste mais AVANT le filtre
-        # temporel et le compteur de lignes — pour garantir que les données
-        # sont en base avant que la sidebar n'affiche "N enregistrements".
-        ensure_artist_has_history(artist)
+        # Carte artiste
+        st.markdown(f"""
+            <div style="text-align:center;padding:0.8rem 0 0.4rem;">
+              <img src="{artist['photo_url']}"
+                   style="width:72px;height:72px;border-radius:50%;object-fit:cover;
+                          border:2px solid {PALETTE['lime']};"
+                   onerror="this.src='https://via.placeholder.com/72/161920/C8F135?text=?'"/>
+              <div style="font-size:1rem;font-weight:800;color:{PALETTE['text']};
+                          margin-top:0.5rem;">{artist['name']}</div>
+              <div style="font-size:0.75rem;color:{PALETTE['muted']};">{artist['genre']}</div>
+            </div>
+        """, unsafe_allow_html=True)
 
         # ── Filtre temporel ───────────────────────────────────────────────
         st.markdown("<div class='sidebar-section'></div>", unsafe_allow_html=True)
@@ -1151,15 +1085,13 @@ def main() -> None:
         )
 
         if st.button("\u25b6\ufe0f  Capturer les stats aujourd'hui"):
-            # Lecture directe via sp.artist() — contourne le cache resolve_artist
-            # pour obtenir les chiffres en temps réel au moment du clic
             try:
+                # Lecture live directe — bypass du cache
                 sp   = init_spotify()
                 live = sp.artist(artist["spotify_id"])
                 new_f = live["followers"]["total"]
                 new_p = live["popularity"]
             except Exception:
-                # Fallback : réutiliser la dernière valeur connue en base
                 latest = get_latest_stats(artist["spotify_id"])
                 new_f  = latest["followers_count"]
                 new_p  = latest["popularity_score"]
@@ -1172,8 +1104,8 @@ def main() -> None:
             )
             st.success(
                 f"\u2705 Capturé — {today.strftime('%d/%m/%Y')}\n\n"
-                f"Followers\u00a0: **{new_f:,}**"
-                f"\u00a0|\u00a0Pop.\u00a0: **{new_p}/100**"
+                f"Followers\u00a0: **{new_f:,}**\u00a0|\u00a0"
+                f"Pop.\u00a0: **{new_p}/100**"
             )
             st.rerun()
 
@@ -1193,14 +1125,15 @@ def main() -> None:
             f"Moteur\u00a0: <strong>{db_label}</strong></div>",
             unsafe_allow_html=True,
         )
-        conn, _ = _get_connection()
-        cur     = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM historique_artistes")
-        nb_rows = cur.fetchone()[0]
-        conn.close()
+        # Compteur de lignes — lu APRÈS ensure_artist_has_history, toujours > 0
+        conn_c, _ = _get_connection()
+        cur_c     = conn_c.cursor()
+        cur_c.execute("SELECT COUNT(*) FROM historique_artistes")
+        nb_rows   = cur_c.fetchone()[0]
+        conn_c.close()
         st.caption(f"{nb_rows} enregistrements dans la base.")
 
-    # ── En-tête principal ─────────────────────────────────────────────────
+    # ── 5.4  EN-TÊTE PRINCIPAL ────────────────────────────────────────────
     st.markdown(f"""
         <div class="subtitle-tag">DIGITAL NEXT — Music Intelligence</div>
         <div class="main-title">
@@ -1213,14 +1146,16 @@ def main() -> None:
         </div>
     """, unsafe_allow_html=True)
 
-    # ── Sections ──────────────────────────────────────────────────────────
+    # ── 5.5  SECTIONS ─────────────────────────────────────────────────────
     section_hud(artist)
+    st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+    section_audience_demographics(artist)
     st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
     section_chansonometre(artist)
     st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
     section_trends(artist, date_from, date_to)
 
-    # ── Footer ────────────────────────────────────────────────────────────
+    # ── 5.6  FOOTER ───────────────────────────────────────────────────────
     st.markdown(f"""
         <div style="border-top:1px solid {PALETTE['border']};margin-top:2.5rem;
                     padding-top:1rem;text-align:center;

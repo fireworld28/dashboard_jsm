@@ -17,7 +17,6 @@ Basculer vers PostgreSQL/Supabase :
 # ──────────────────────────────────────────────────────────────────────────
 # SECTION 1 — IMPORTS & CONFIGURATION GÉNÉRALE
 # ──────────────────────────────────────────────────────────────────────────
-import os
 import re
 import sqlite3
 from datetime import date, timedelta
@@ -199,52 +198,81 @@ def init_spotify():
     """
     Initialise le client Spotipy via Client Credentials Flow.
 
-    Lecture des secrets :
-      • st.secrets["SPOTIFY_CLIENT_ID"]      (Streamlit Cloud / secrets.toml)
-      • Fallback : variable d'environnement SPOTIFY_CLIENT_ID
+    Stratégie de credentials (ordre de priorité) :
+      1. st.secrets["SPOTIFY_CLIENT_ID"] / st.secrets["SPOTIFY_CLIENT_SECRET"]
+         → Source de vérité sur Streamlit Cloud quand les secrets sont configurés.
+      2. Fallback hardcodé sur les credentials du compte Digital Next
+         → Garantit que l'app se connecte même si les secrets ne s'injectent pas.
 
-    Utilise st.secrets["KEY"] avec try/except KeyError — jamais .get() qui
-    peut masquer silencieusement une clé absente sur Streamlit Cloud.
-
-    Retourne le client Spotipy si la connexion réussit, None sinon.
+    En cas d'échec d'authentification, affiche une erreur explicite et stoppe.
     """
+    import spotipy
+    from spotipy.oauth2 import SpotifyClientCredentials
+
+    # ── 1. Tenter les secrets Streamlit (priorité) ────────────────────────
     try:
-        import spotipy
-        from spotipy.oauth2 import SpotifyClientCredentials
+        client_id     = st.secrets["SPOTIFY_CLIENT_ID"]
+        client_secret = st.secrets["SPOTIFY_CLIENT_SECRET"]
+    except (KeyError, AttributeError, Exception):
+        # Secrets absents ou Streamlit Cloud non configuré → fallback
+        client_id     = "159"
+        client_secret = "2fe"
 
-        # Lecture case-sensitive via bracket notation + try/except
-        try:
-            client_id = st.secrets["SPOTIFY_CLIENT_ID"]
-        except (KeyError, AttributeError):
-            client_id = os.getenv("SPOTIFY_CLIENT_ID", "")
-
-        try:
-            client_secret = st.secrets["SPOTIFY_CLIENT_SECRET"]
-        except (KeyError, AttributeError):
-            client_secret = os.getenv("SPOTIFY_CLIENT_SECRET", "")
-
-        if not client_id or not client_secret:
-            return None
-
-        sp = spotipy.Spotify(
+    # ── 2. Construire et retourner le client ──────────────────────────────
+    try:
+        return spotipy.Spotify(
             auth_manager=SpotifyClientCredentials(
                 client_id=client_id,
                 client_secret=client_secret,
             )
         )
-        # Test de connectivité minimal — lève une exception si les credentials
-        # sont invalides, ce qui retourne None plutôt que de crasher l'app
-        sp.search(q="test", type="artist", limit=1)
-        return sp
-
-    except Exception:
-        return None
+    except Exception as exc:
+        st.error(
+            f"**\u00c9chec de connexion Spotify.**\n\n"
+            f"V\u00e9rifiez vos credentials dans les Streamlit Secrets.\n\n"
+            f"D\u00e9tail\u00a0: `{exc}`"
+        )
+        st.stop()
 
 
 def _extract_artist_id(query: str) -> str | None:
     """Retourne l'artist ID si query est une URL/URI Spotify, sinon None."""
     m = _SPOTIFY_ARTIST_RE.search(query.strip())
     return m.group(1) if m else None
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def search_artists_live(query: str) -> list[dict]:
+    """
+    Recherche les 5 artistes Spotify les plus proches pour la saisie `query`.
+
+    Retourne une liste de dicts légers :
+      { "label": "Nom (genres, N followers)", "spotify_id": "...", "name": "..." }
+
+    Mis en cache 2 min (ttl=120) — assez court pour rester réactif à la frappe,
+    assez long pour éviter de saturer le quota sur chaque keystroke.
+    """
+    sp = init_spotify()
+    if not query.strip():
+        return []
+
+    try:
+        results = sp.search(q=query.strip(), type="artist", limit=5)
+        items   = results.get("artists", {}).get("items", [])
+        out = []
+        for item in items:
+            followers = item.get("followers", {}).get("total", 0)
+            genres    = item.get("genres", [])[:2]
+            genre_str = f" · {', '.join(genres)}" if genres else ""
+            label     = f"{item['name']}{genre_str} · {followers:,} followers"
+            out.append({
+                "label":      label,
+                "spotify_id": item["id"],
+                "name":       item["name"],
+            })
+        return out
+    except Exception:
+        return []
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -256,8 +284,6 @@ def resolve_artist(query: str) -> dict | None:
            photo_url, audio_profile (vide, à remplir par fetch_audio_profile)
     """
     sp = init_spotify()
-    if sp is None:
-        return None
 
     try:
         artist_id = _extract_artist_id(query)
@@ -296,7 +322,7 @@ def resolve_artist(query: str) -> dict | None:
 def fetch_audio_profile(spotify_id: str) -> dict:
     """
     Calcule la moyenne réelle des 5 dimensions audio depuis les top tracks.
-    Aucune valeur aléatoire — fallback sur profil neutre fixe si API indisponible.
+    Aucune valeur aléatoire — fallback sur profil neutre fixe si l'API échoue.
 
     Pipeline :
       sp.artist_top_tracks(spotify_id, country="FR")
@@ -305,9 +331,6 @@ def fetch_audio_profile(spotify_id: str) -> dict:
       → dict {label_fr: float 0.0–1.0}
     """
     sp = init_spotify()
-
-    if sp is None:
-        return dict(_NEUTRAL_PROFILE)
 
     try:
         top       = sp.artist_top_tracks(spotify_id, country="FR")
@@ -343,12 +366,10 @@ def fetch_top_tracks_df(spotify_id: str) -> pd.DataFrame:
     Aucune génération aléatoire de titres fictifs.
     En cas d'échec API, retourne un DataFrame vide avec les mêmes colonnes.
     """
-    _COLS = ["🎵  Titre", "Popularité", "Album", "Sortie",
+    _COLS = ["\U0001f3b5  Titre", "Popularité", "Album", "Sortie",
              "Énergie", "Dansabilité", "Durée"]
 
     sp = init_spotify()
-    if sp is None:
-        return pd.DataFrame(columns=_COLS)
 
     try:
         top       = sp.artist_top_tracks(spotify_id, country="FR")
@@ -972,74 +993,85 @@ def main() -> None:
             </div>
         """, unsafe_allow_html=True)
 
-        # ── Statut API (sans bannière si tout va bien) ────────────────────
-        sp_available = init_spotify() is not None
-        if not sp_available:
-            st.warning(
-                "\u26a0\ufe0f **API Spotify non disponible.**\n\n"
-                "Vérifiez que `SPOTIFY_CLIENT_ID` et `SPOTIFY_CLIENT_SECRET` "
-                "sont définis dans vos Streamlit Secrets.",
-                icon="\U0001f512",
-            )
-
-        # ── Recherche artiste ─────────────────────────────────────────────
+        # ── Recherche prédictive artiste ──────────────────────────────────
         st.markdown(
             f"<div class='sidebar-label'>\U0001f50d Recherche artiste</div>",
             unsafe_allow_html=True,
         )
-        query = st.text_input(
-            label="Rechercher un artiste (Nom ou Lien Spotify)",
-            value="Jul",
-            label_visibility="collapsed",
-            placeholder="Nom, URL ou URI Spotify\u2026",
-        )
 
-        # Feedback visuel immédiat sous le champ
-        search_placeholder = st.empty()
+        # Champ de saisie libre — chaque frappe déclenche une recherche live
+        query = st.text_input(
+            label="Taper le nom d'un artiste\u2026",
+            value=st.session_state.get("search_query", "Jul"),
+            label_visibility="collapsed",
+            placeholder="Nom ou lien Spotify\u2026",
+            key="search_query",
+        )
 
         artist = None
 
-        if query.strip() and sp_available:
-            search_placeholder.markdown(
-                "<div class='search-status-searching'>"
-                "\U0001f50d Recherche en cours sur le catalogue Spotify\u2026"
-                "</div>",
-                unsafe_allow_html=True,
-            )
-            artist = resolve_artist(query)
+        if query.strip():
+            # Détecter si c'est une URL/URI directe → lookup immédiat, pas de selectbox
+            direct_id = _extract_artist_id(query)
 
-            if artist is not None:
-                search_placeholder.markdown(
-                    f"<div class='search-status-found'>"
-                    f"\u2705 Artiste trouvé\u00a0: <strong>{artist['name']}</strong>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-                # Profil audio réel (moyenne des top tracks, pas de valeurs aléatoires)
-                with st.spinner("Analyse audio en cours\u2026"):
-                    artist["audio_profile"] = fetch_audio_profile(artist["spotify_id"])
+            if direct_id:
+                with st.spinner("\U0001f50d Chargement de l'artiste\u2026"):
+                    artist = resolve_artist(direct_id)
+                if artist:
+                    st.toast(
+                        f"\u2705 **{artist['name']}** charg\u00e9",
+                        icon="\U0001f3b5",
+                    )
+
             else:
-                search_placeholder.markdown(
-                    f"<div class='search-status-searching'>"
-                    f"\u2757 Aucun résultat pour « {query} »"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
+                # Recherche live : top 5 correspondances
+                candidates = search_artists_live(query)
 
+                if candidates:
+                    # Selectbox prédictif : l'utilisateur choisit parmi les 5 résultats
+                    labels       = [c["label"] for c in candidates]
+                    label_to_id  = {c["label"]: c["spotify_id"] for c in candidates}
+
+                    selected_label = st.selectbox(
+                        label="Sélectionner un artiste",
+                        options=labels,
+                        index=0,
+                        label_visibility="collapsed",
+                        key="artist_selectbox",
+                    )
+
+                    selected_id = label_to_id[selected_label]
+
+                    # Charger le profil complet de l'artiste sélectionné
+                    # (résolution mise en cache 15 min par spotify_id)
+                    with st.spinner("Chargement du profil\u2026"):
+                        artist = resolve_artist(selected_id)
+
+                    if artist:
+                        st.toast(
+                            f"\u2705 **{artist['name']}** s\u00e9lectionn\u00e9",
+                            icon="\U0001f3b5",
+                        )
+                else:
+                    st.caption("\u2753 Aucun r\u00e9sultat — essayez un autre nom.")
+
+        # Profil audio (mis en cache : n'appelle l'API qu'une fois par artiste)
+        if artist is not None:
+            with st.spinner("Analyse audio\u2026"):
+                artist["audio_profile"] = fetch_audio_profile(artist["spotify_id"])
+
+        # Guard : conserver le dernier artiste valide entre les reruns
         if artist is None:
-            # Mode démo uniquement si l'API est réellement indisponible
-            artist = {
-                "name":            "DEMO ARTIST",
-                "spotify_id":      "demo_artist_000",
-                "genre":           "Mode démo — Configurez vos secrets Spotify",
-                "followers_base":  50_000,
-                "popularity_base": 50,
-                "photo_url":       (
-                    f"https://via.placeholder.com/150/"
-                    f"{PALETTE['muted'][1:]}/0D0F14?text=DEMO"
-                ),
-                "audio_profile":   dict(_NEUTRAL_PROFILE),
-            }
+            if "last_artist" in st.session_state:
+                artist = st.session_state["last_artist"]
+            else:
+                st.info(
+                    "Tapez un nom d'artiste dans le champ ci-dessus\n"
+                    "pour commencer l'analyse."
+                )
+                st.stop()
+        else:
+            st.session_state["last_artist"] = artist
 
         # Seed auto si premier accès à cet artiste
         seed_fake_history(artist)
@@ -1073,21 +1105,18 @@ def main() -> None:
         )
 
         if st.button("\u25b6\ufe0f  Capturer les stats aujourd'hui"):
-            # Tente de lire les vraies données depuis l'API
-            if sp_available:
-                live = resolve_artist(artist["spotify_id"])
-                if live:
-                    new_f = live["followers_base"]
-                    new_p = live["popularity_base"]
-                else:
-                    latest = get_latest_stats(artist["spotify_id"])
-                    new_f  = latest["followers_count"]
-                    new_p  = latest["popularity_score"]
-            else:
-                import random as _rnd
+            # Lecture directe via sp.artist() — contourne le cache resolve_artist
+            # pour obtenir les chiffres en temps réel au moment du clic
+            try:
+                sp   = init_spotify()
+                live = sp.artist(artist["spotify_id"])
+                new_f = live["followers"]["total"]
+                new_p = live["popularity"]
+            except Exception:
+                # Fallback : réutiliser la dernière valeur connue en base
                 latest = get_latest_stats(artist["spotify_id"])
-                new_f  = int(latest["followers_count"] * _rnd.uniform(1.003, 1.015))
-                new_p  = min(100, latest["popularity_score"] + _rnd.randint(-1, 2))
+                new_f  = latest["followers_count"]
+                new_p  = latest["popularity_score"]
 
             upsert_daily_stats(
                 artiste_name=artist["name"],

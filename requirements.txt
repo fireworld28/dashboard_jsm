@@ -1,9 +1,18 @@
-# Music Manager Dashboard — Dépendances Python
-# Installation : pip install -r requirements.txt
+# ──────────────────────────────────────────────────────────────────────────
+# Music Manager Dashboard — Dépendances Streamlit Cloud
+# Déposer ce fichier à la racine du dépôt GitHub (même niveau que app.py).
+# Streamlit Cloud l'exécute automatiquement via pip install -r requirements.txt
+# avant le premier démarrage de l'application.
+# ──────────────────────────────────────────────────────────────────────────
 
+# Interface & serveur web
 streamlit>=1.35.0
-plotly>=5.22.0
+
+# API Spotify — OBLIGATOIRE (corrige le ModuleNotFoundError: No module named 'spotipy')
+spotipy>=2.23.0
+
+# Manipulation de données
 pandas>=2.2.0
 
-# Optionnel : seulement si vous basculez vers PostgreSQL / Supabase
-# psycopg2-binary>=2.9.9
+# Visualisations interactives
+plotly>=5.22.0

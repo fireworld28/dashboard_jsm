@@ -26,6 +26,8 @@ from pathlib import Path
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import spotipy
+from spotipy.oauth2 import SpotifyClientCredentials
 import streamlit as st
 
 st.set_page_config(
@@ -207,9 +209,6 @@ def init_spotify():
 
     En cas d'échec d'authentification, affiche une erreur explicite et stoppe.
     """
-    import spotipy
-    from spotipy.oauth2 import SpotifyClientCredentials
-
     # ── 1. Tenter les secrets Streamlit (priorité) ────────────────────────
     try:
         client_id     = st.secrets["SPOTIFY_CLIENT_ID"]

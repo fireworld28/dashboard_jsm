@@ -1,18 +1,19 @@
 # ──────────────────────────────────────────────────────────────────────────
-# Music Manager Dashboard — Dépendances Streamlit Cloud
-# Déposer ce fichier à la racine du dépôt GitHub (même niveau que app.py).
-# Streamlit Cloud l'exécute automatiquement via pip install -r requirements.txt
-# avant le premier démarrage de l'application.
+# Music Manager Dashboard — Dépendances
+# À placer à la racine du dépôt GitHub (même niveau que app.py).
+# Utilisé par :
+#   • Streamlit Cloud  → pip install -r requirements.txt au démarrage
+#   • GitHub Actions   → pip install -r requirements.txt dans le workflow cron
 # ──────────────────────────────────────────────────────────────────────────
 
-# Interface & serveur web
+# Interface Streamlit
 streamlit>=1.35.0
 
-# API Spotify — OBLIGATOIRE (corrige le ModuleNotFoundError: No module named 'spotipy')
+# API Spotify — OBLIGATOIRE pour init_spotify() et toutes les fonctions sp.*
 spotipy>=2.23.0
 
-# Manipulation de données
+# Manipulation et agrégation des données (resample, DataFrame, etc.)
 pandas>=2.2.0
 
-# Visualisations interactives
+# Visualisations interactives (line chart, scatter, radar Scatterpolar)
 plotly>=5.22.0

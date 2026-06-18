@@ -30,7 +30,7 @@ import streamlit as st
 
 # ── Artiste cible (único) ─────────────────────────────────────────────────
 # Remplacer par l'ID Spotify de l'artiste à monitorer.
-HARDCODED_ARTIST_ID = "0T4d2alRNWD29IME6Yb142"   # id Spotify de l'artiste suivi (ex: "0T4d2alRNWD29IME6Yb142" pour "Kito")
+HARDCODED_ARTIST_ID = "3iM09vBtAAd9477SgST6EA"   # id Spotify de l'artiste suivi (ex: "0T4d2alRNWD29IME6Yb142" pour "Kito")
 
 # ── Démographie audience (données privées non exposées par l'API Spotify) ─
 # Adapter ces valeurs à la connaissance réelle du manager.

@@ -373,8 +373,15 @@ def init_db() -> None:
     """
     Crée la table historique_artistes avec contrainte UNIQUE(spotify_id, date).
     Idempotente — appelée à chaque démarrage.
+
+    Migration v2 : ajoute la colonne `streams_real` (INTEGER, DEFAULT 0)
+    sur les bases existantes via ALTER TABLE IF NOT EXISTS COLUMN.
+    SQLite ne supporte pas IF NOT EXISTS sur ADD COLUMN, donc on catch
+    l'OperationalError "duplicate column" silencieusement.
     """
-    conn, _ = _get_connection()
+    conn, db_type = _get_connection()
+
+    # ── Création initiale de la table ────────────────────────────────────
     conn.execute("""
         CREATE TABLE IF NOT EXISTS historique_artistes (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -383,9 +390,30 @@ def init_db() -> None:
             spotify_id          TEXT    NOT NULL,
             followers_count     INTEGER NOT NULL,
             popularity_score    INTEGER NOT NULL,
+            streams_real        INTEGER NOT NULL DEFAULT 0,
             UNIQUE (spotify_id, date_enregistrement)
         )
     """)
+
+    # ── Migration v2 : colonne streams_real sur base existante ───────────
+    # SQLite lève OperationalError si la colonne existe déjà — on l'absorbe.
+    # PostgreSQL supporte "ADD COLUMN IF NOT EXISTS" nativement.
+    if db_type == "sqlite":
+        try:
+            conn.execute(
+                "ALTER TABLE historique_artistes ADD COLUMN streams_real INTEGER NOT NULL DEFAULT 0"
+            )
+        except Exception:
+            pass   # colonne déjà présente — aucune action requise
+    else:
+        try:
+            conn.execute(
+                "ALTER TABLE historique_artistes ADD COLUMN IF NOT EXISTS "
+                "streams_real INTEGER NOT NULL DEFAULT 0"
+            )
+        except Exception:
+            pass
+
     conn.commit()
     conn.close()
 
@@ -541,10 +569,17 @@ def get_artist_history(
     date_from:  date | None = None,
     date_to:    date | None = None,
 ) -> pd.DataFrame:
+    """
+    Lit l'historique filtré depuis la base.
+    Retourne : date_enregistrement | followers_count | popularity_score | streams_real
+    streams_real vaut 0 pour les lignes seedées fictives ;
+    il est rempli par GitHub Actions / le bouton "Capturer" quand disponible.
+    """
     conn, db_type = _get_connection()
     ph     = _ph(db_type)
     query  = (
-        f"SELECT date_enregistrement, followers_count, popularity_score "
+        f"SELECT date_enregistrement, followers_count, popularity_score, "
+        f"COALESCE(streams_real, 0) AS streams_real "
         f"FROM historique_artistes WHERE spotify_id = {ph}"
     )
     params: list = [spotify_id]
@@ -868,6 +903,18 @@ def section_trends(
     date_from: date,
     date_to:   date,
 ) -> None:
+    """
+    Visualise 3 courbes simultanées sur le graphe temporel :
+
+    1. Streams Approximation  — followers × 12,5, trait pointillé muted
+    2. Streams Réels          — colonne streams_real (Spotify For Artists),
+                                trait plein teal avec markers et fill
+    3. Popularité             — axe droit, trait pointillé purple
+
+    La trace "Streams Réels" est masquée par défaut (visible="legendonly")
+    quand toutes ses valeurs sont à 0 (base vierge sans import manuel),
+    afin de ne pas surcharger le graphe inutilement.
+    """
     st.markdown("""
         <div class='section-card'>
           <div class='section-label'>Section 04</div>
@@ -881,9 +928,10 @@ def section_trends(
         st.markdown(
             f"<div style='font-size:0.78rem;color:{PALETTE['muted']};font-weight:600;"
             f"letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.3rem;'>"
-            f"\U0001f4c8 Streams estimés (base de données)</div>",
+            f"\U0001f4c8 Streams & Popularité (base de données)</div>",
             unsafe_allow_html=True,
         )
+
         granularity = st.radio(
             label="Agrégation",
             options=list(_RESAMPLE_ALIAS.keys()),
@@ -891,85 +939,155 @@ def section_trends(
             horizontal=True,
             label_visibility="collapsed",
         )
+
         df_hist = get_artist_history(artist["spotify_id"], date_from, date_to)
 
         if df_hist.empty:
             st.info("Aucune donnée dans la plage temporelle sélectionnée.")
         else:
+            # ── Calcul de la colonne streams_estimated ──────────────────────
             df_hist["streams_estimated"] = df_hist["followers_count"] * 12.5
+
+            # ── Rééchantillonnage selon la granularité ──────────────────────
             alias = _RESAMPLE_ALIAS[granularity]
-            df_r  = (
+            df_r = (
                 df_hist
                 .set_index("date_enregistrement")
                 .resample(alias)
                 .agg(
                     streams_estimated=("streams_estimated", "sum"),
-                    popularity_score=("popularity_score",  "mean"),
+                    streams_real=("streams_real",           "sum"),
+                    popularity_score=("popularity_score",   "mean"),
                 )
-                .dropna()
+                .dropna(subset=["popularity_score"])  # conserver les périodes sans réels
                 .reset_index()
                 .rename(columns={"date_enregistrement": "date"})
             )
 
+            # Déterminer si les streams réels ont au moins 1 valeur non nulle
+            has_real_data = df_r["streams_real"].sum() > 0
+
             fig_line = go.Figure()
 
-            # Streams — lime, rempli, markers sur chaque point de synchro
+            # ── Trace 1 — Streams Approximation ────────────────────────────
+            # Muted (#6B7280), tiret, fill léger — toujours visible
             fig_line.add_trace(go.Scatter(
                 x=df_r["date"],
                 y=df_r["streams_estimated"],
-                mode="lines+markers",
-                name="Streams estimés",
-                line=dict(color=PALETTE["lime"], width=2.5),
-                marker=dict(
-                    color=PALETTE["lime"], size=6, symbol="circle",
-                    line=dict(color=PALETTE["bg"], width=1.5),
+                mode="lines",
+                name="Streams (Approximation)",
+                line=dict(
+                    color=PALETTE["muted"],
+                    width=1.8,
+                    dash="dash",
                 ),
                 fill="tozeroy",
-                fillcolor=_FILL_LIME,
+                fillcolor=_FILL_MUTED,
                 hovertemplate=(
                     "<b>%{x|%d %b %Y}</b><br>"
-                    "Streams\u00a0: <b>%{y:,.0f}</b><extra></extra>"
+                    "Estimation\u00a0: <b>%{y:,.0f}</b>"
+                    "<extra>followers \u00d7 12,5</extra>"
                 ),
             ))
 
-            # Popularité — purple, pointillé, axe droit
+            # ── Trace 2 — Streams Réels (Spotify For Artists) ───────────────
+            # Teal (#00E5CC), plein avec markers, fill coloré — masquée si vide
+            fig_line.add_trace(go.Scatter(
+                x=df_r["date"],
+                y=df_r["streams_real"],
+                mode="lines+markers",
+                name="Streams R\u00e9els (Spotify For Artists)",
+                visible=True if has_real_data else "legendonly",
+                line=dict(
+                    color=PALETTE["teal"],
+                    width=2.5,
+                ),
+                marker=dict(
+                    color=PALETTE["teal"],
+                    size=6,
+                    symbol="circle",
+                    line=dict(color=PALETTE["bg"], width=1.5),
+                ),
+                fill="tozeroy",
+                fillcolor="rgba(0, 229, 204, 0.10)",   # teal @ 10 %, jamais hex-8
+                hovertemplate=(
+                    "<b>%{x|%d %b %Y}</b><br>"
+                    "Streams r\u00e9els\u00a0: <b>%{y:,.0f}</b>"
+                    "<extra>Spotify For Artists</extra>"
+                ),
+            ))
+
+            # ── Trace 3 — Popularité (axe droit) ───────────────────────────
+            # Purple (#9B6DFF), pointillé, axe y2
             fig_line.add_trace(go.Scatter(
                 x=df_r["date"],
                 y=df_r["popularity_score"],
                 mode="lines+markers",
-                name="Popularité",
+                name="Popularit\u00e9",
                 yaxis="y2",
-                line=dict(color=PALETTE["purple"], width=1.8, dash="dot"),
+                line=dict(
+                    color=PALETTE["purple"],
+                    width=1.8,
+                    dash="dot",
+                ),
                 marker=dict(
-                    color=PALETTE["purple"], size=5, symbol="square",
+                    color=PALETTE["purple"],
+                    size=5,
+                    symbol="square",
                     line=dict(color=PALETTE["bg"], width=1),
                 ),
-                hovertemplate="Popularité\u00a0: <b>%{y:.1f}</b>/100<extra></extra>",
+                hovertemplate=(
+                    "Popularit\u00e9\u00a0: <b>%{y:.1f}</b>/100<extra></extra>"
+                ),
             ))
 
-            layout = _plotly_layout(height=360)
+            # ── Layout triple-trace ─────────────────────────────────────────
+            # Fusion via dict.update() pour éviter le TypeError doublon de clé
+            layout = _plotly_layout(height=400)
             layout.update({
                 "yaxis": dict(
-                    title="Streams estimés",
+                    title=dict(
+                        text="Streams",
+                        font=dict(color=PALETTE["muted"], size=11),
+                    ),
                     gridcolor=PALETTE["border"],
                     linecolor=PALETTE["border"],
                     tickfont=dict(color=PALETTE["muted"], size=11),
+                    rangemode="tozero",
                 ),
                 "yaxis2": dict(
-                    title="Popularité /100",
-                    overlaying="y", side="right",
-                    range=[0, 100], showgrid=False,
-                    tickfont=dict(color=PALETTE["purple"]),
+                    title=dict(
+                        text="Popularit\u00e9 /100",
+                        font=dict(color=PALETTE["purple"], size=11),
+                    ),
+                    overlaying="y",
+                    side="right",
+                    range=[0, 100],
+                    showgrid=False,
+                    tickfont=dict(color=PALETTE["purple"], size=11),
+                    linecolor=PALETTE["purple"],
                 ),
                 "legend": dict(
-                    orientation="h", yanchor="bottom", y=1.02,
-                    xanchor="left", x=0,
+                    orientation="h",
+                    yanchor="bottom", y=1.02,
+                    xanchor="left",   x=0,
                     bgcolor="rgba(0,0,0,0)",
-                    bordercolor=PALETTE["border"], font=dict(size=11),
+                    bordercolor=PALETTE["border"],
+                    font=dict(size=10),
+                    traceorder="normal",
                 ),
+                "hovermode": "x unified",
             })
             fig_line.update_layout(layout)
             st.plotly_chart(fig_line, use_container_width=True)
+
+            # Note contextuelle si les streams réels sont à 0
+            if not has_real_data:
+                st.caption(
+                    "\U0001f4cb **Streams Réels** : colonne `streams_real` vide. "
+                    "Importez vos exports Spotify For Artists via GitHub Actions "
+                    "ou le script de synchronisation pour activer cette courbe."
+                )
 
     with col_radar:
         st.markdown(

@@ -44,7 +44,7 @@ def main():
     try:
         # Connexion API Spotify
         auth_manager = SpotifyClientCredentials(client_id=client_id, client_secret=client_secret)
-        sp = spotipy.Spotify(auth_manager=auth_manager, timeout=10)
+        sp = spotipy.Spotify(auth_manager=auth_manager)
         
         # Récupération des données en direct
         print(f"📡 Interrogation de l'API Spotify pour l'ID : {HARDCODED_ARTIST_ID}...")

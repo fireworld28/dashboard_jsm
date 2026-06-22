@@ -39,26 +39,22 @@ jobs:
 # 5. Commit et Push de la base SQLite mise à jour vers ton GitHub
     - name: Commit and Push changes
       run: |
-        # Configuration des identifiants du robot Git
         git config --global user.name "GitHub Action Bot"
         git config --global user.email "actions@github.com"
         
-        # 🟢 ÉTAPE A : Vérification physique de l'existence du fichier
+        # Vérification physique de l'existence du fichier
         if [ -f "music_manager.db" ]; then
           echo "✅ Fichier music_manager.db détecté. Préparation du suivi Git..."
           git add music_manager.db
           
-          # 🟢 ÉTAPE B : Vérification si des changements réels ont eu lieu
-          # (Évite l'erreur Git s'il n'y a rien de neuf à sauvegarder aujourd'hui)
+          # Vérification si des changements réels ont eu lieu
           if ! git diff --cached --quiet; then
             echo "📈 Nouvelles données détectées. Génération du commit..."
             git commit -m "📈 Auto-update: Historique Spotify Kito [$(date +'%Y-%m-%d')]"
             git push
           else
-            echo "ℹ️ Aucune nouvelle modification détectée dans la base de données aujourd'hui."
+            echo "Aucune nouvelle donnée aujourd'hui (déjà synchronisé)."
           fi
         else
-          echo "❌ ERREUR CRITIQUE : Le fichier music_manager.db n'existe pas à la racine du projet."
-          echo "Vérifiez que le script 'cron_sync.py' s'est exécuté sans planter."
-          exit 1
+          echo "❌ Le fichier music_manager.db n'existe pas encore."
         fi

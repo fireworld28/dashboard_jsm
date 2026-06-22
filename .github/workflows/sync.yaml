@@ -42,11 +42,8 @@ jobs:
         git config --global user.name "GitHub Action Bot"
         git config --global user.email "actions@github.com"
         
-        # 🟢 Sécurité Senior : On vérifie physiquement si le fichier existe avant de l'ajouter
         if [ -f "music_manager.db" ]; then
           git add music_manager.db
-          
-          # On vérifie s'il y a de vraies modifications à sauvegarder (évite les commits vides)
           if ! git diff --cached --quiet; then
             git commit -m "📈 Auto-update: Historique Spotify Kito [$(date +'%Y-%m-%d')]"
             git push
@@ -54,6 +51,6 @@ jobs:
             echo "Aucune modification détectée dans la base de données aujourd'hui."
           fi
         else
-          echo "❌ Erreur : Le fichier music_manager.db n'a pas été trouvé à la racine."
+          echo "❌ Erreur : Le fichier music_manager.db est introuvable."
           exit 1
         fi

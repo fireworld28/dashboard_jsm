@@ -49,9 +49,15 @@ def main():
         # Récupération des données en direct
         print(f"📡 Interrogation de l'API Spotify pour l'ID : {HARDCODED_ARTIST_ID}...")
         live_data = sp.artist(HARDCODED_ARTIST_ID)
-        name = live_data["name"]
-        followers = live_data["followers"]["total"]
-        popularity = live_data["popularity"]
+        name = live_data.get("name", "Kito")
+        popularity = live_data.get("popularity", 0)
+   
+        # Récupération des followers avec repli à 0 si absent
+        followers_data = live_data.get("followers", {})
+        if isinstance(followers_data, dict):
+            followers = followers_data.get("total", 0)
+        else:
+            followers = 0
         
         print(f"🎵 Données récupérées pour {name} : {followers} followers, {popularity} popularité.")
         

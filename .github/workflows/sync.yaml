@@ -1,13 +1,15 @@
 name: Automatic Spotify Sync
 
 on:
+  workflow_dispatch:
   schedule:
-    # S'exécute automatiquement tous les jours à 00:00 UTC (1h ou 2h du matin en France)
-    - cron: '0 0 * * *'
-  workflow_dispatch: # Permet de lancer la synchronisation manuellement depuis l'onglet Actions de GitHub
+    - cron: '0 2 * * *'
+
+permissions:
+  contents: write
 
 jobs:
-  sync-and-commit:
+  sync-spotify:
     runs-on: ubuntu-latest
 
     steps:

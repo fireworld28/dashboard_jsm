@@ -1,0 +1,51 @@
+name: Automatic Spotify Sync
+
+on:
+  schedule:
+    # S'exécute automatiquement tous les jours à 00:00 UTC (1h ou 2h du matin en France)
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Permet de lancer la synchronisation manuellement depuis l'onglet Actions de GitHub
+
+jobs:
+  sync-and-commit:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Récupérer le code du dépôt GitHub
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        persist-credentials: true
+
+    # 2. Installer Python
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    # 3. Installer les dépendances (spotipy, pandas, etc.)
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+
+    # 4. Exécuter le script en injectant tes Secrets Spotify
+    - name: Run synchronization script
+      env:
+        SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+        SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+      run: python cron_sync.py
+
+    # 5. Commit et Push de la base SQLite mise à jour vers ton GitHub
+    - name: Commit and Push changes
+      run: |
+        git config --global user.name "GitHub Action Bot"
+        git config --global user.email "actions@github.com"
+        git add music_manager.db
+        # On vérifie s'il y a des modifications à sauvegarder pour éviter une erreur d'index vide
+        if ! git diff --cached --quiet; then
+          git commit -m "📈 Auto-update: Historique Spotify Kito [$(date +'%Y-%m-%d')]"
+          git push
+        else
+          print "Aucune nouvelle donnée aujourd'hui (déjà synchronisé)."
+        fi

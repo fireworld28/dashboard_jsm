@@ -1,0 +1,7 @@
+# .streamlit/config.toml
+[theme]
+primaryColor = "#C8F135"          # Vert Lime
+backgroundColor = "#0D0F14"      # Fond sombre de l'application
+secondaryBackgroundColor = "#161920" # Arrière-plan des cartes et formulaires
+textColor = "#E8EAF0"
+font = "sans serif"

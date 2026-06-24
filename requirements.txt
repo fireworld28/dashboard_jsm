@@ -1,19 +1,4 @@
-# ──────────────────────────────────────────────────────────────────────────
-# Music Manager Dashboard — Dépendances
-# À placer à la racine du dépôt GitHub (même niveau que app.py).
-# Utilisé par :
-#   • Streamlit Cloud  → pip install -r requirements.txt au démarrage
-#   • GitHub Actions   → pip install -r requirements.txt dans le workflow cron
-# ──────────────────────────────────────────────────────────────────────────
-
-# Interface Streamlit
-streamlit>=1.35.0
-
-# API Spotify — OBLIGATOIRE pour init_spotify() et toutes les fonctions sp.*
-spotipy>=2.23.0
-
-# Manipulation et agrégation des données (resample, DataFrame, etc.)
-pandas>=2.2.0
-
-# Visualisations interactives (line chart, scatter, radar Scatterpolar)
-plotly>=5.22.0
+streamlit==1.32.0
+pandas==2.2.1
+spotipy==2.23.0
+libsql-client==0.0.4

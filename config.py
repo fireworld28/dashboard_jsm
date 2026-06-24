@@ -1,10 +1,8 @@
 # config.py
-from datetime import date
 
 HARDCODED_ARTIST_ID = "0T4d2alRNWD29IME6Yb142"   # KITO (@kitolenergie)
-DB_FILE = "music_manager.db"
 
-# ── Palette graphique "Studio Nuit" ──
+# Palette graphique "Studio Nuit"
 PALETTE = {
     "bg":       "#0D0F14",
     "card":     "#161920",
@@ -18,7 +16,6 @@ PALETTE = {
     "chart_bg": "rgba(0,0,0,0)",
 }
 
-# ── Données démographiques (Fallback car non exposées par l'API publique) ──
 AUDIENCE_GENDER = {
     "Hommes": 62,
     "Femmes": 38,

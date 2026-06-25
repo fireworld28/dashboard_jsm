@@ -1,4 +1,12 @@
-streamlit==1.32.0
-pandas==2.2.1
-spotipy==2.23.0
-libsql-client==0.0.4
+# requirements.txt — Dashboard KITO
+# Streamlit Cloud lit ce fichier pour installer les dépendances.
+# Versions épinglées pour garantir la reproductibilité.
+
+streamlit>=1.35.0,<2.0.0
+plotly>=5.22.0,<6.0.0
+pandas>=2.2.0,<3.0.0
+spotipy>=2.24.0,<3.0.0
+libsql-experimental>=0.0.16
+
+# Optionnel — pour le script de sync local avec .env
+python-dotenv>=1.0.0

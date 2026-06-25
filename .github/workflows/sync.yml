@@ -1,0 +1,53 @@
+name: Sync Spotify → Turso Cloud
+
+on:
+  schedule:
+    # Tous les jours à 06h00 UTC (08h00 Paris en hiver, 08h00 en été)
+    - cron: "0 6 * * *"
+
+  # Déclenchement manuel depuis l'onglet Actions de GitHub
+  workflow_dispatch:
+    inputs:
+      force_upsert:
+        description: "Forcer l'upsert même si un enregistrement existe pour aujourd'hui"
+        required: false
+        default: "false"
+        type: choice
+        options: ["true", "false"]
+
+jobs:
+  sync:
+    name: Collecte & Upsert Turso
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout du dépôt
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Installation des dépendances légères
+        run: pip install spotipy libsql-experimental python-dotenv
+
+      - name: Synchronisation Spotify → Turso
+        env:
+          SPOTIFY_CLIENT_ID:     ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          TURSO_DATABASE_URL:    ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN:      ${{ secrets.TURSO_AUTH_TOKEN }}
+          ARTIST_SPOTIFY_ID:     ${{ secrets.ARTIST_SPOTIFY_ID }}
+          FORCE_UPSERT:          ${{ github.event.inputs.force_upsert || 'false' }}
+        run: python scripts/sync.py
+
+      - name: Rapport de synchronisation
+        if: always()
+        run: |
+          echo "=== Résultat du job ==="
+          echo "Statut    : ${{ job.status }}"
+          echo "Timestamp : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Artiste   : ${{ secrets.ARTIST_SPOTIFY_ID }}"

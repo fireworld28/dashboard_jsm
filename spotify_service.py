@@ -2,8 +2,9 @@
 """
 Service Spotify via Spotipy (Client Credentials Flow).
 
-Fix critique : Spotipy 2.26 injecte market=None sur tous les endpoints,
-ce qui cause 400/403. On patch _get() pour filtrer les params None.
+Fix Spotipy 2.26 : injecte market=None/country=None sur tous les endpoints
+→ 400/403 Spotify. Le patch se fait sur _internal_call pour filtrer
+les valeurs None dans params avant chaque requête HTTP.
 """
 
 import os
@@ -37,9 +38,11 @@ _NEUTRAL_PROFILE = {
 
 def _make_clean_client(client_id: str, client_secret: str) -> spotipy.Spotify:
     """
-    Crée un client Spotipy patchant _get() pour supprimer
-    les paramètres None avant chaque requête API.
-    Spotipy 2.26 injecte market=None sur search/tracks/etc → 400/403.
+    Crée un client Spotipy avec patch sur _internal_call pour
+    filtrer les paramètres None avant chaque requête HTTP.
+    
+    Spotipy 2.26 passe market=None/country=None sur tous les endpoints,
+    ce que l'API Spotify rejette avec 400 Invalid limit / 403 Forbidden.
     """
     sp = spotipy.Spotify(
         auth_manager=SpotifyClientCredentials(
@@ -48,13 +51,14 @@ def _make_clean_client(client_id: str, client_secret: str) -> spotipy.Spotify:
         )
     )
 
-    # Patch : filtrer tous les kwargs None avant l'appel HTTP
-    original_get = sp._get
-    def _clean_get(url, args=None, payload=None, **kwargs):
-        clean_kwargs = {k: v for k, v in kwargs.items() if v is not None}
-        return original_get(url, args=args, payload=payload, **clean_kwargs)
-    sp._get = _clean_get
+    original_internal_call = sp._internal_call
 
+    def _patched_internal_call(method, url, payload, params):
+        # Supprimer tous les paramètres None avant envoi HTTP
+        clean_params = {k: v for k, v in params.items() if v is not None}
+        return original_internal_call(method, url, payload, clean_params)
+
+    sp._internal_call = _patched_internal_call
     return sp
 
 
@@ -116,7 +120,7 @@ def resolve_artist(spotify_id: str) -> dict:
 def _get_artist_tracks(sp: spotipy.Spotify, spotify_id: str) -> list:
     """
     Collecte les titres via artist_albums() + album_tracks() + tracks().
-    Évite artist_top_tracks (déprécié) et search (market=None problématique).
+    Le patch _internal_call élimine les market=None/country=None automatiquement.
     """
     try:
         all_tracks = []
@@ -147,10 +151,10 @@ def _get_artist_tracks(sp: spotipy.Spotify, spotify_id: str) -> list:
         if not all_tracks:
             return []
 
-        # Récupérer la popularité via tracks() — le patch _get() supprime market=None
+        # Popularité via tracks() — market=None filtré par le patch
         track_ids   = [t["id"] for t in all_tracks if t.get("id")][:50]
         full_tracks = sp.tracks(track_ids).get("tracks", [])
-        pop_map = {t["id"]: t.get("popularity", 0) for t in full_tracks if t}
+        pop_map     = {t["id"]: t.get("popularity", 0) for t in full_tracks if t}
         for t in all_tracks:
             t["popularity"] = pop_map.get(t["id"], 0)
 

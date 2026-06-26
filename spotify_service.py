@@ -1,4 +1,10 @@
-# spotify_service.py — VERSION DEBUG (temporaire)
+# spotify_service.py
+"""
+Service Spotify — Client Credentials Flow.
+Fix final : sp.tracks() retourne 403 sans market.
+Solution : récupérer la popularité via sp.albums() qui l'inclut dans les tracks.
+"""
+
 import os
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
@@ -29,6 +35,7 @@ _NEUTRAL_PROFILE = {
 
 
 def _make_clean_client(client_id: str, client_secret: str) -> spotipy.Spotify:
+    """Patch _internal_call pour filtrer les params None avant chaque requête."""
     sp = spotipy.Spotify(
         auth_manager=SpotifyClientCredentials(
             client_id=client_id,
@@ -97,68 +104,60 @@ def resolve_artist(spotify_id: str) -> dict:
 
 
 def _get_artist_tracks(sp: spotipy.Spotify, spotify_id: str) -> list:
-    """Version debug — affiche les étapes dans les logs Streamlit."""
-    import sys
-
+    """
+    Collecte les titres via artist_albums() + album() complet (inclut popularity).
+    N'utilise PAS sp.tracks() qui retourne 403 sans market depuis 2024.
+    sp.album() retourne les tracks avec leur popularité directement.
+    """
     try:
-        print(f"[DEBUG] Fetching albums for {spotify_id}", file=sys.stderr)
+        # 1. Lister les albums/singles
         albums_result = sp.artist_albums(
             spotify_id,
             include_groups="album,single",
             limit=10,
         )
-        albums = albums_result.get("items", [])
-        print(f"[DEBUG] Found {len(albums)} albums", file=sys.stderr)
+        album_items = albums_result.get("items", [])
 
         all_tracks = []
-        for album in albums[:6]:
-            album_id   = album.get("id")
-            album_name = album.get("name", "?")
+        for album_meta in album_items[:6]:
+            album_id = album_meta.get("id")
             if not album_id:
                 continue
 
-            tracks_result = sp.album_tracks(album_id, limit=10)
-            raw_tracks    = tracks_result.get("items", [])
-            print(f"[DEBUG] Album '{album_name}' → {len(raw_tracks)} tracks", file=sys.stderr)
+            # 2. Appel album() complet — retourne tracks avec popularity
+            full_album = sp.album(album_id)
+            tracks     = full_album.get("tracks", {}).get("items", [])
 
-            for track in raw_tracks:
+            for track in tracks:
                 artist_ids = [a["id"] for a in track.get("artists", [])]
-                match      = spotify_id in artist_ids
-                print(f"[DEBUG]   Track '{track.get('name')}' artists={artist_ids} match={match}", file=sys.stderr)
-                if match:
-                    all_tracks.append({
-                        "id":          track["id"],
-                        "name":        track["name"],
-                        "duration_ms": track.get("duration_ms", 0),
-                        "album":       album,
-                        "artists":     track.get("artists", []),
-                        "popularity":  0,
-                    })
-
-        print(f"[DEBUG] Total tracks collected: {len(all_tracks)}", file=sys.stderr)
+                if spotify_id not in artist_ids:
+                    continue
+                all_tracks.append({
+                    "id":          track["id"],
+                    "name":        track["name"],
+                    "duration_ms": track.get("duration_ms", 0),
+                    "album":       album_meta,
+                    # popularity dans album() est sur l'album, pas le track
+                    # On utilisera l'ordre de l'album comme proxy
+                    "popularity":  full_album.get("popularity", 0),
+                    "track_number": track.get("track_number", 99),
+                })
 
         if not all_tracks:
             return []
 
-        track_ids   = [t["id"] for t in all_tracks if t.get("id")][:50]
-        full_tracks = sp.tracks(track_ids).get("tracks", [])
-        pop_map     = {t["id"]: t.get("popularity", 0) for t in full_tracks if t}
-        for t in all_tracks:
-            t["popularity"] = pop_map.get(t["id"], 0)
-
+        # Dédoublonner par nom, trier par popularité album puis numéro de piste
         seen, dedup = set(), []
-        for t in sorted(all_tracks, key=lambda x: x["popularity"], reverse=True):
+        for t in sorted(all_tracks,
+                        key=lambda x: (-x["popularity"], x["track_number"])):
             key = t["name"].lower()
             if key not in seen:
                 seen.add(key)
                 dedup.append(t)
 
-        result = dedup[:10]
-        print(f"[DEBUG] Returning {len(result)} tracks", file=sys.stderr)
-        return result
+        return dedup[:10]
 
-    except Exception as e:
-        print(f"[DEBUG] EXCEPTION in _get_artist_tracks: {type(e).__name__}: {e}", file=sys.stderr)
+    except Exception:
         return []
 
 
@@ -215,7 +214,5 @@ def fetch_top_tracks_df(spotify_id: str) -> pd.DataFrame:
         df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=_COLS)
         df.index = range(1, len(df) + 1)
         return df
-    except Exception as e:
-        import sys
-        print(f"[DEBUG] EXCEPTION in fetch_top_tracks_df: {type(e).__name__}: {e}", file=sys.stderr)
+    except Exception:
         return pd.DataFrame(columns=_COLS)

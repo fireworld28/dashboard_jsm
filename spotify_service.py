@@ -1,12 +1,4 @@
-# spotify_service.py
-"""
-Service Spotify via Spotipy (Client Credentials Flow).
-
-Fix Spotipy 2.26 : injecte market=None/country=None sur tous les endpoints
-→ 400/403 Spotify. Le patch se fait sur _internal_call pour filtrer
-les valeurs None dans params avant chaque requête HTTP.
-"""
-
+# spotify_service.py — VERSION DEBUG (temporaire)
 import os
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
@@ -37,34 +29,22 @@ _NEUTRAL_PROFILE = {
 
 
 def _make_clean_client(client_id: str, client_secret: str) -> spotipy.Spotify:
-    """
-    Crée un client Spotipy avec patch sur _internal_call pour
-    filtrer les paramètres None avant chaque requête HTTP.
-    
-    Spotipy 2.26 passe market=None/country=None sur tous les endpoints,
-    ce que l'API Spotify rejette avec 400 Invalid limit / 403 Forbidden.
-    """
     sp = spotipy.Spotify(
         auth_manager=SpotifyClientCredentials(
             client_id=client_id,
             client_secret=client_secret,
         )
     )
-
-    original_internal_call = sp._internal_call
-
-    def _patched_internal_call(method, url, payload, params):
-        # Supprimer tous les paramètres None avant envoi HTTP
-        clean_params = {k: v for k, v in params.items() if v is not None}
-        return original_internal_call(method, url, payload, clean_params)
-
-    sp._internal_call = _patched_internal_call
+    original = sp._internal_call
+    def _patched(method, url, payload, params):
+        clean = {k: v for k, v in params.items() if v is not None}
+        return original(method, url, payload, clean)
+    sp._internal_call = _patched
     return sp
 
 
 @st.cache_resource
 def get_spotify_client() -> spotipy.Spotify:
-    """Client Spotipy unique et persistant pour toute la session."""
     client_id, client_secret = "", ""
     try:
         client_id     = st.secrets["SPOTIFY_CLIENT_ID"]
@@ -76,18 +56,17 @@ def get_spotify_client() -> spotipy.Spotify:
     if not client_secret:
         client_secret = os.getenv("SPOTIFY_CLIENT_SECRET", "")
     if not client_id or not client_secret:
-        st.error("**Identifiants Spotify manquants.** Vérifie secrets.toml.")
+        st.error("Identifiants Spotify manquants.")
         st.stop()
     try:
         return _make_clean_client(client_id, client_secret)
     except Exception as exc:
-        st.error(f"**Échec connexion Spotify.** `{exc}`")
+        st.error(f"Échec connexion Spotify : {exc}")
         st.stop()
 
 
 @st.cache_data(ttl=900, show_spinner=False)
 def resolve_artist(spotify_id: str) -> dict:
-    """Récupère l'identité de l'artiste avec failsafe."""
     sp = get_spotify_client()
     try:
         data        = sp.artist(spotify_id)
@@ -118,27 +97,35 @@ def resolve_artist(spotify_id: str) -> dict:
 
 
 def _get_artist_tracks(sp: spotipy.Spotify, spotify_id: str) -> list:
-    """
-    Collecte les titres via artist_albums() + album_tracks() + tracks().
-    Le patch _internal_call élimine les market=None/country=None automatiquement.
-    """
-    try:
-        all_tracks = []
+    """Version debug — affiche les étapes dans les logs Streamlit."""
+    import sys
 
+    try:
+        print(f"[DEBUG] Fetching albums for {spotify_id}", file=sys.stderr)
         albums_result = sp.artist_albums(
             spotify_id,
             include_groups="album,single",
             limit=10,
         )
         albums = albums_result.get("items", [])
+        print(f"[DEBUG] Found {len(albums)} albums", file=sys.stderr)
 
+        all_tracks = []
         for album in albums[:6]:
-            album_id = album.get("id")
+            album_id   = album.get("id")
+            album_name = album.get("name", "?")
             if not album_id:
                 continue
+
             tracks_result = sp.album_tracks(album_id, limit=10)
-            for track in tracks_result.get("items", []):
-                if any(a["id"] == spotify_id for a in track.get("artists", [])):
+            raw_tracks    = tracks_result.get("items", [])
+            print(f"[DEBUG] Album '{album_name}' → {len(raw_tracks)} tracks", file=sys.stderr)
+
+            for track in raw_tracks:
+                artist_ids = [a["id"] for a in track.get("artists", [])]
+                match      = spotify_id in artist_ids
+                print(f"[DEBUG]   Track '{track.get('name')}' artists={artist_ids} match={match}", file=sys.stderr)
+                if match:
                     all_tracks.append({
                         "id":          track["id"],
                         "name":        track["name"],
@@ -148,17 +135,17 @@ def _get_artist_tracks(sp: spotipy.Spotify, spotify_id: str) -> list:
                         "popularity":  0,
                     })
 
+        print(f"[DEBUG] Total tracks collected: {len(all_tracks)}", file=sys.stderr)
+
         if not all_tracks:
             return []
 
-        # Popularité via tracks() — market=None filtré par le patch
         track_ids   = [t["id"] for t in all_tracks if t.get("id")][:50]
         full_tracks = sp.tracks(track_ids).get("tracks", [])
         pop_map     = {t["id"]: t.get("popularity", 0) for t in full_tracks if t}
         for t in all_tracks:
             t["popularity"] = pop_map.get(t["id"], 0)
 
-        # Dédoublonner et trier par popularité
         seen, dedup = set(), []
         for t in sorted(all_tracks, key=lambda x: x["popularity"], reverse=True):
             key = t["name"].lower()
@@ -166,15 +153,17 @@ def _get_artist_tracks(sp: spotipy.Spotify, spotify_id: str) -> list:
                 seen.add(key)
                 dedup.append(t)
 
-        return dedup[:10]
+        result = dedup[:10]
+        print(f"[DEBUG] Returning {len(result)} tracks", file=sys.stderr)
+        return result
 
-    except Exception:
+    except Exception as e:
+        print(f"[DEBUG] EXCEPTION in _get_artist_tracks: {type(e).__name__}: {e}", file=sys.stderr)
         return []
 
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_audio_profile(spotify_id: str) -> dict:
-    """Analyse l'empreinte sonore de l'artiste."""
     sp = get_spotify_client()
     try:
         tracks    = _get_artist_tracks(sp, spotify_id)
@@ -197,7 +186,6 @@ def fetch_audio_profile(spotify_id: str) -> dict:
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_top_tracks_df(spotify_id: str) -> pd.DataFrame:
-    """Génère le tableau Top 10 titres avec indicateurs audio."""
     _COLS = ["🎵 Titre", "Popularité", "Album", "Sortie", "Énergie", "Dansabilité", "Durée"]
     sp = get_spotify_client()
     try:
@@ -227,5 +215,7 @@ def fetch_top_tracks_df(spotify_id: str) -> pd.DataFrame:
         df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=_COLS)
         df.index = range(1, len(df) + 1)
         return df
-    except Exception:
+    except Exception as e:
+        import sys
+        print(f"[DEBUG] EXCEPTION in fetch_top_tracks_df: {type(e).__name__}: {e}", file=sys.stderr)
         return pd.DataFrame(columns=_COLS)

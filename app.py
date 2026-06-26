@@ -3,8 +3,8 @@
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║   MUSIC MANAGER DASHBOARD — Studio Nuit · KITO                          ║
 ║   Digital Next / RBK Groupe                                             ║
-║   Stack  : Streamlit · Plotly · Turso Cloud (libsql)                   ║
-║   API    : Spotify via Spotipy (Client Credentials Flow)               ║
+║   Stack  : Streamlit · Plotly · Turso Cloud (libsql-client)            ║
+║   API    : Spotify via Spotipy (resolve_artist uniquement)             ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -20,15 +20,7 @@ from config import (
 import database as db
 import spotify_service as sps
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONSTANTES ESTHÉTIQUES
-# ─────────────────────────────────────────────────────────────────────────────
-
-MUTED = "#9CA3AF"   # ratio ~5.2:1 sur card → WCAG AA ✅ (ancienne valeur #6B7280 = ❌)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PAGE CONFIG
-# ─────────────────────────────────────────────────────────────────────────────
+MUTED = "#9CA3AF"
 
 st.set_page_config(
     page_title="Studio Nuit — KITO",
@@ -42,13 +34,8 @@ try:
 except Exception as e:
     st.error(f"Connexion Turso Cloud impossible : {e}")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CSS GLOBAL — THÈME STUDIO NUIT
-# ─────────────────────────────────────────────────────────────────────────────
-
 st.markdown(f"""
 <style>
-/* ── Base ── */
 .stApp {{
     background-color: {PALETTE['bg']};
     color: {PALETTE['text']};
@@ -58,8 +45,6 @@ st.markdown(f"""
     background-color: {PALETTE['card']};
     border-right: 1px solid {PALETTE['border']};
 }}
-
-/* ── Header principal ── */
 .page-eyebrow {{
     font-size: 0.65rem;
     font-weight: 700;
@@ -90,8 +75,6 @@ st.markdown(f"""
     color: {MUTED};
     margin-bottom: 2rem;
 }}
-
-/* ── Diviseur de section ── */
 .section-divider {{
     display: flex;
     align-items: center;
@@ -118,8 +101,6 @@ st.markdown(f"""
     background: {PALETTE['teal']};
     flex-shrink: 0;
 }}
-
-/* ── Cartes KPI ── */
 .kpi-card {{
     background: {PALETTE['card']};
     border: 1px solid {PALETTE['border']};
@@ -177,8 +158,6 @@ st.markdown(f"""
     margin-top: 0.3rem;
     line-height: 1.3;
 }}
-
-/* ── Carte artiste sidebar ── */
 .artist-card {{
     background: linear-gradient(135deg, {PALETTE['bg']} 0%, rgba(200,241,53,0.04) 100%);
     border: 1px solid rgba(200,241,53,0.15);
@@ -217,71 +196,6 @@ st.markdown(f"""
     margin-top: 0.4rem;
     letter-spacing: 0.06rem;
 }}
-
-/* ── Top tracks — barres popularité ── */
-.track-row {{
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.55rem 0;
-    border-bottom: 1px solid {PALETTE['border']};
-}}
-.track-row:last-child {{ border-bottom: none; }}
-.track-rank {{
-    font-size: 0.75rem;
-    font-weight: 700;
-    color: {MUTED};
-    width: 18px;
-    text-align: right;
-    flex-shrink: 0;
-}}
-.track-info {{ flex: 1; min-width: 0; }}
-.track-name {{
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: {PALETTE['text']};
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}}
-.track-album {{
-    font-size: 0.7rem;
-    color: {MUTED};
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}}
-.track-bar-wrap {{
-    width: 90px;
-    flex-shrink: 0;
-}}
-.track-bar-bg {{
-    background: {PALETTE['border']};
-    border-radius: 3px;
-    height: 4px;
-    overflow: hidden;
-}}
-.track-bar-fill {{
-    height: 4px;
-    border-radius: 3px;
-    background: linear-gradient(90deg, {PALETTE['teal']}, {PALETTE['lime']});
-}}
-.track-pop {{
-    font-size: 0.7rem;
-    font-weight: 600;
-    color: {MUTED};
-    text-align: right;
-    margin-top: 2px;
-}}
-.track-dur {{
-    font-size: 0.75rem;
-    color: {MUTED};
-    flex-shrink: 0;
-    width: 32px;
-    text-align: right;
-}}
-
-/* ── Bloc info chansonomètre ── */
 .insight-card {{
     background: {PALETTE['card']};
     border: 1px solid {PALETTE['border']};
@@ -304,8 +218,6 @@ st.markdown(f"""
     margin: 0;
 }}
 .insight-card b {{ color: {PALETTE['lime']}; font-weight: 700; }}
-
-/* ── Sidebar statut pipeline ── */
 .pipeline-status {{
     background: rgba(0,229,204,0.05);
     border: 1px solid rgba(0,229,204,0.15);
@@ -329,8 +241,6 @@ st.markdown(f"""
     0%,100% {{ opacity:1; }}
     50%      {{ opacity:0.4; }}
 }}
-
-/* ── Footer ── */
 .footer {{
     border-top: 1px solid {PALETTE['border']};
     padding: 1.2rem 0;
@@ -340,16 +250,54 @@ st.markdown(f"""
     letter-spacing: 0.05rem;
     margin-top: 3rem;
 }}
+/* ── Tableau Discographie ── */
+.disco-table {{
+    width: 100%;
+    border-collapse: collapse;
+}}
+.disco-table th {{
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08rem;
+    color: {MUTED};
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid {PALETTE['border']};
+    text-align: left;
+}}
+.disco-table td {{
+    font-size: 0.85rem;
+    color: {PALETTE['text']};
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid {PALETTE['border']};
+}}
+.disco-table tr:last-child td {{ border-bottom: none; }}
+.disco-table tr:hover td {{ background: rgba(255,255,255,0.02); }}
+.disco-title {{ font-weight: 600; }}
+.disco-album {{ color: {MUTED}; font-size: 0.78rem; }}
+.disco-bar-bg {{
+    background: {PALETTE['border']};
+    border-radius: 3px;
+    height: 4px;
+    width: 80px;
+    overflow: hidden;
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 6px;
+}}
+.disco-bar-fill {{
+    height: 4px;
+    border-radius: 3px;
+    background: linear-gradient(90deg, {PALETTE['teal']}, {PALETTE['lime']});
+    display: block;
+}}
 </style>
 """, unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# UTILITAIRES
-# ─────────────────────────────────────────────────────────────────────────────
+# ── UTILITAIRES ───────────────────────────────────────────────────────────────
 
 def divider(label: str) -> None:
-    """Séparateur visuel entre sections."""
     st.markdown(f"""
         <div class="section-divider">
             <div class="section-divider-dot"></div>
@@ -359,20 +307,17 @@ def divider(label: str) -> None:
     """, unsafe_allow_html=True)
 
 
-def lttb_downsample(df: pd.DataFrame, threshold: int = 300) -> pd.DataFrame:
-    """
-    Largest Triangle Three Buckets — préserve visuellement pics et creux.
-    Ref : Steinarsson 2013.
-    """
+def lttb_downsample(df: pd.DataFrame, col_y: str, threshold: int = 300) -> pd.DataFrame:
+    """LTTB — préserve pics et creux visuellement (Steinarsson 2013)."""
     n = len(df)
     if n <= threshold:
         return df
 
-    data = df[["date_enregistrement", "followers_count"]].copy()
+    data = df[["date_enregistrement", col_y]].copy()
     data["_x"] = data["date_enregistrement"].astype("int64") / 1e9
-    xy = data[["_x", "followers_count"]].values
+    xy = data[["_x", col_y]].values
 
-    result_idx = [0]
+    result_idx  = [0]
     bucket_size = (n - 2) / (threshold - 2)
 
     for i in range(threshold - 2):
@@ -380,11 +325,9 @@ def lttb_downsample(df: pd.DataFrame, threshold: int = 300) -> pd.DataFrame:
         avg_e = int((i + 2) * bucket_size) + 1
         avg_x = xy[avg_s:avg_e, 0].mean()
         avg_y = xy[avg_s:avg_e, 1].mean()
-
         rs = int(i * bucket_size) + 1
         re = int((i + 1) * bucket_size) + 1
         a  = result_idx[-1]
-
         max_area, max_idx = -1, rs
         for j in range(rs, re):
             area = abs(
@@ -399,14 +342,9 @@ def lttb_downsample(df: pd.DataFrame, threshold: int = 300) -> pd.DataFrame:
     return df.iloc[result_idx].reset_index(drop=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SIDEBAR
-# ─────────────────────────────────────────────────────────────────────────────
+# ── SIDEBAR ───────────────────────────────────────────────────────────────────
 
-def build_sidebar(artist: dict) -> tuple:
-    """Construit la sidebar et retourne (date_from, date_to)."""
-
-    # Carte artiste
+def build_sidebar(artist: dict, sync_date: str) -> tuple:
     st.sidebar.markdown(f"""
         <div class="artist-card">
             <img class="artist-photo"
@@ -418,7 +356,6 @@ def build_sidebar(artist: dict) -> tuple:
         </div>
     """, unsafe_allow_html=True)
 
-    # Filtre temporel
     st.sidebar.markdown(
         f'<div style="font-size:0.7rem;font-weight:700;text-transform:uppercase;'
         f'letter-spacing:0.08rem;color:{MUTED};margin-bottom:0.4rem;">'
@@ -429,7 +366,6 @@ def build_sidebar(artist: dict) -> tuple:
     date_from = st.sidebar.date_input("Du", today - timedelta(days=365), label_visibility="collapsed")
     date_to   = st.sidebar.date_input("Au", today, label_visibility="collapsed")
 
-    # Préréglages rapides
     col_a, col_b, col_c = st.sidebar.columns(3)
     if col_a.button("30J", use_container_width=True):
         date_from = today - timedelta(days=30)
@@ -442,33 +378,28 @@ def build_sidebar(artist: dict) -> tuple:
         date_to   = today
 
     st.sidebar.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
-
-    # Statut pipeline
-    sync_date = db.get_latest_stats(HARDCODED_ARTIST_ID).get("date_enregistrement", "—")
     st.sidebar.markdown(f"""
         <div class="pipeline-status">
             <span class="status-dot"></span><b>TURSO CLOUD</b> connecté<br>
             Dernière sync : <b>{sync_date}</b><br>
-            API Spotify : <b>Production v1</b><br>
-            Refresh auto : <b>TTL 1h</b>
+            GitHub Actions : <b>06h00 UTC</b><br>
+            Refresh cache : <b>TTL 1h</b>
         </div>
     """, unsafe_allow_html=True)
 
     return date_from, date_to
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION HUD — 4 KPIs
-# ─────────────────────────────────────────────────────────────────────────────
+# ── HUD ───────────────────────────────────────────────────────────────────────
 
 def section_hud(stats: dict, prev: dict | None) -> None:
     c1, c2, c3, c4 = st.columns(4)
 
-    def delta_html(val, unit=""):
+    def delta_html(val):
         if val > 0:
-            return f'<div class="kpi-delta delta-up">▲ +{val:,}{unit}</div>'
+            return f'<div class="kpi-delta delta-up">▲ +{val:,}</div>'
         if val < 0:
-            return f'<div class="kpi-delta delta-down">▼ {val:,}{unit}</div>'
+            return f'<div class="kpi-delta delta-down">▼ {val:,}</div>'
         return f'<div class="kpi-delta delta-flat">─ Stable</div>'
 
     f_cur   = stats.get("followers_count", 0)
@@ -493,7 +424,7 @@ def section_hud(stats: dict, prev: dict | None) -> None:
             <div class="kpi-card kpi-teal">
                 <div class="kpi-label">Indice Popularité</div>
                 <div class="kpi-value">{p_cur}<sup>/100</sup></div>
-                {delta_html(p_cur - p_prev, "")}
+                {delta_html(p_cur - p_prev)}
                 <div class="kpi-hint">Médiane genre similaire : ~48</div>
             </div>
         """, unsafe_allow_html=True)
@@ -521,20 +452,17 @@ def section_hud(stats: dict, prev: dict | None) -> None:
         """, unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION AUDIENCE
-# ─────────────────────────────────────────────────────────────────────────────
+# ── AUDIENCE ──────────────────────────────────────────────────────────────────
 
 def section_audience() -> None:
     divider("Sociologie de l'Audience")
     c1, c2 = st.columns([4, 6])
 
-    # Donut genre
     with c1:
-        labels = list(AUDIENCE_GENDER.keys())
-        values = list(AUDIENCE_GENDER.values())
         fig = go.Figure(go.Pie(
-            labels=labels, values=values, hole=0.62,
+            labels=list(AUDIENCE_GENDER.keys()),
+            values=list(AUDIENCE_GENDER.values()),
+            hole=0.62,
             marker=dict(
                 colors=[PALETTE["lime"], PALETTE["purple"]],
                 line=dict(color=PALETTE["bg"], width=2),
@@ -548,25 +476,17 @@ def section_audience() -> None:
             margin=dict(t=10, b=10, l=10, r=10),
             paper_bgcolor="rgba(0,0,0,0)",
             font=dict(color=PALETTE["text"]),
-            annotations=[dict(
-                text="Genre",
-                x=0.5, y=0.5,
-                font=dict(size=11, color=MUTED),
-                showarrow=False,
-            )],
+            annotations=[dict(text="Genre", x=0.5, y=0.5,
+                              font=dict(size=11, color=MUTED), showarrow=False)],
         )
         st.caption("Répartition par genre")
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-    # Barres âge avec dégradé
     with c2:
         tranches = list(AUDIENCE_AGE.keys())[::-1]
         pcts     = list(AUDIENCE_AGE.values())[::-1]
-        colors   = [
-            PALETTE["lime"], PALETTE["teal"],
-            PALETTE["teal"], PALETTE["purple"], PALETTE["purple"],
-        ][:len(tranches)]
-
+        colors   = [PALETTE["lime"], PALETTE["teal"], PALETTE["teal"],
+                    PALETTE["purple"], PALETTE["purple"]][:len(tranches)]
         fig = go.Figure(go.Bar(
             x=pcts, y=tranches, orientation="h",
             marker=dict(color=colors, line=dict(width=0)),
@@ -587,9 +507,7 @@ def section_audience() -> None:
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION CHANSONOMÈTRE — RADAR
-# ─────────────────────────────────────────────────────────────────────────────
+# ── CHANSONOMÈTRE ─────────────────────────────────────────────────────────────
 
 def section_chansonometre() -> None:
     divider("Empreinte Acoustique — Chansonomètre")
@@ -599,28 +517,22 @@ def section_chansonometre() -> None:
     vals = list(MARKET_REFERENCE.values()) + [list(MARKET_REFERENCE.values())[0]]
 
     fig = go.Figure()
-    # Zone de remplissage
     fig.add_trace(go.Scatterpolar(
         r=vals, theta=cats, fill="toself",
         fillcolor="rgba(200,241,53,0.12)",
         line=dict(color=PALETTE["lime"], width=2.5),
         marker=dict(size=5, color=PALETTE["lime"]),
-        name="KITO",
         hovertemplate="%{theta} : <b>%{r:.2f}</b><extra></extra>",
     ))
     fig.update_layout(
         polar=dict(
             bgcolor="rgba(0,0,0,0)",
-            radialaxis=dict(
-                visible=True, range=[0, 1],
-                gridcolor=PALETTE["border"],
-                tickfont=dict(color=MUTED, size=9),
-                tickvals=[0.25, 0.5, 0.75],
-            ),
-            angularaxis=dict(
-                gridcolor=PALETTE["border"],
-                tickfont=dict(color=PALETTE["text"], size=11),
-            ),
+            radialaxis=dict(visible=True, range=[0, 1],
+                            gridcolor=PALETTE["border"],
+                            tickfont=dict(color=MUTED, size=9),
+                            tickvals=[0.25, 0.5, 0.75]),
+            angularaxis=dict(gridcolor=PALETTE["border"],
+                             tickfont=dict(color=PALETTE["text"], size=11)),
         ),
         showlegend=False,
         margin=dict(t=20, b=20, l=20, r=20),
@@ -629,7 +541,6 @@ def section_chansonometre() -> None:
 
     with c1:
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
     with c2:
         st.markdown(f"""
             <div class="insight-card">
@@ -639,82 +550,86 @@ def section_chansonometre() -> None:
                     Un score d'<b>Énergie (0.72)</b> et de <b>Dansabilité (0.70)</b> très élevés
                     placent ses productions dans la zone haute du marché urbain / électronique français.<br><br>
                     La faible composante <b>Acoustique (0.12)</b> confirme des choix de sound-design
-                    modernes et synthétiques, en phase avec les codes du rap/drill actuel.
-                    Le score de <b>Speechiness (0.22)</b> marque un équilibre entre flow rythmique
-                    et impact mélodique.
+                    modernes et synthétiques. Le score de <b>Speechiness (0.22)</b> marque un équilibre
+                    entre flow rythmique et impact mélodique.
                 </p>
             </div>
         """, unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION TRENDS — COURBE HISTORIQUE DOUBLE AXE
-# ─────────────────────────────────────────────────────────────────────────────
+# ── TRENDS — DOUBLE AXE ABONNÉS + POPULARITÉ ─────────────────────────────────
 
 def section_trends(df: pd.DataFrame) -> None:
-    divider("Historique & Analyse Macro")
+    divider("Historique Turso Cloud — Abonnés & Popularité")
 
     if df.empty:
-        st.info("Aucune donnée historique sur la plage sélectionnée.")
+        st.info("Aucune donnée en base pour la plage sélectionnée. Lance une sync GitHub Actions pour alimenter Turso.")
         return
 
-    days = (df["date_enregistrement"].max() - df["date_enregistrement"].min()).days
-    threshold = 150 if days > 365 else (200 if days > 180 else 300)
-    df_plot = lttb_downsample(df, threshold)
-    n_total, n_plot = len(df), len(df_plot)
+    n_points = len(df)
+    days     = (df["date_enregistrement"].max() - df["date_enregistrement"].min()).days
+
+    # Downsampling LTTB adaptatif selon la plage
+    threshold = 150 if days > 365 else (200 if days > 180 else min(300, n_points))
+    df_f = lttb_downsample(df, "followers_count", threshold)
+    df_p = lttb_downsample(df, "popularity_score", threshold) if "popularity_score" in df.columns else df_f
 
     fig = go.Figure()
 
-    # Trace 1 — Abonnés (axe gauche, lime)
+    # ── Trace Abonnés (lime, fill) ──
     fig.add_trace(go.Scatter(
-        x=df_plot["date_enregistrement"],
-        y=df_plot["followers_count"],
+        x=df_f["date_enregistrement"],
+        y=df_f["followers_count"],
         name="Abonnés",
-        mode="lines",
+        mode="lines+markers",
         line=dict(color=PALETTE["lime"], width=2.5),
+        marker=dict(size=4, color=PALETTE["lime"]),
         fill="tozeroy",
-        fillcolor="rgba(200,241,53,0.05)",
-        hovertemplate="<b>%{x|%d %b %Y}</b><br>Abonnés : %{y:,}<extra></extra>",
+        fillcolor="rgba(200,241,53,0.06)",
+        hovertemplate="<b>%{x|%d %b %Y}</b><br>Abonnés : <b>%{y:,}</b><extra></extra>",
         yaxis="y1",
     ))
 
-    # Trace 2 — Popularité (axe droit, teal, si colonne présente)
-    if "popularity_score" in df_plot.columns:
+    # ── Trace Popularité (teal, pointillés, axe droit) ──
+    if "popularity_score" in df_p.columns and df_p["popularity_score"].sum() > 0:
         fig.add_trace(go.Scatter(
-            x=df_plot["date_enregistrement"],
-            y=df_plot["popularity_score"],
-            name="Popularité",
-            mode="lines",
+            x=df_p["date_enregistrement"],
+            y=df_p["popularity_score"],
+            name="Popularité /100",
+            mode="lines+markers",
             line=dict(color=PALETTE["teal"], width=2, dash="dot"),
-            hovertemplate="<b>%{x|%d %b %Y}</b><br>Popularité : %{y}/100<extra></extra>",
+            marker=dict(size=4, color=PALETTE["teal"]),
+            hovertemplate="<b>%{x|%d %b %Y}</b><br>Popularité : <b>%{y}/100</b><extra></extra>",
             yaxis="y2",
         ))
 
     fig.update_layout(
-        margin=dict(t=20, b=20, l=0, r=60),
+        margin=dict(t=30, b=20, l=0, r=70),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color=PALETTE["text"]),
         hovermode="x unified",
         legend=dict(
-            orientation="h",
-            y=1.08, x=0,
+            orientation="h", y=1.12, x=0,
             font=dict(size=11, color=PALETTE["text"]),
             bgcolor="rgba(0,0,0,0)",
         ),
         xaxis=dict(
             showgrid=True, gridcolor=PALETTE["border"],
             title=None, tickfont=dict(color=MUTED),
+            showline=True, linecolor=PALETTE["border"],
         ),
         yaxis=dict(
             showgrid=True, gridcolor=PALETTE["border"],
-            title="Abonnés", titlefont=dict(color=PALETTE["lime"]),
+            title="Abonnés", titlefont=dict(color=PALETTE["lime"], size=11),
             tickfont=dict(color=PALETTE["lime"]),
+            showline=True, linecolor=PALETTE["border"],
         ),
         yaxis2=dict(
             overlaying="y", side="right",
             range=[0, 100],
-            title="Popularité /100", titlefont=dict(color=PALETTE["teal"]),
+            title="Popularité /100",
+            titlefont=dict(color=PALETTE["teal"], size=11),
             tickfont=dict(color=PALETTE["teal"]),
             showgrid=False,
         ),
@@ -722,90 +637,51 @@ def section_trends(df: pd.DataFrame) -> None:
 
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-    if n_total > n_plot:
-        st.caption(
-            f"Optimisé LTTB : {n_plot} points affichés sur {n_total} "
-            f"— pics et tendances intégralement préservés."
-        )
+    # Résumé statistique sous le graphe
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        first = int(df["followers_count"].iloc[0])
+        last  = int(df["followers_count"].iloc[-1])
+        gain  = last - first
+        sign  = "+" if gain >= 0 else ""
+        st.metric("Progression sur la période", f"{sign}{gain:,} abonnés")
+    with col2:
+        st.metric("Points de données", f"{n_points} jours enregistrés")
+    with col3:
+        if "popularity_score" in df.columns:
+            avg_pop = round(df["popularity_score"].mean(), 1)
+            st.metric("Popularité moyenne", f"{avg_pop}/100")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION TOP TITRES — CUSTOM ROWS (pas de st.dataframe)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def section_top_tracks() -> None:
-    divider("Top 10 Titres · Spotify Live")
-
-    df = sps.fetch_top_tracks_df(HARDCODED_ARTIST_ID)
-    if df.empty:
-        st.error("Impossible de charger les top titres depuis l'API Spotify.")
-        return
-
-    rows_html = ""
-    for i, (_, row) in enumerate(df.iterrows(), 1):
-        pop   = int(row.get("Popularité", 0))
-        name  = str(row.get("🎵 Titre", "—"))
-        album = str(row.get("Album", "—"))
-        dur   = str(row.get("Durée", "—"))
-        bar_w = int(pop)   # 0-100 → largeur en %
-
-        rows_html += f"""
-        <div class="track-row">
-            <div class="track-rank">{i}</div>
-            <div class="track-info">
-                <div class="track-name">{name}</div>
-                <div class="track-album">{album}</div>
-            </div>
-            <div class="track-bar-wrap">
-                <div class="track-bar-bg">
-                    <div class="track-bar-fill" style="width:{bar_w}%"></div>
-                </div>
-                <div class="track-pop">{pop}/100</div>
-            </div>
-            <div class="track-dur">{dur}</div>
-        </div>"""
-
-    st.markdown(
-        f'<div style="background:{PALETTE["card"]};border:1px solid {PALETTE["border"]};'
-        f'border-radius:10px;padding:1rem 1.2rem;">{rows_html}</div>',
-        unsafe_allow_html=True,
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────────────────────────────────────
+# ── MAIN ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
 
-    # ── Données ──────────────────────────────────────────────────────────────
-    artist     = sps.resolve_artist(HARDCODED_ARTIST_ID)
-    stats      = db.get_latest_stats(HARDCODED_ARTIST_ID)
-    prev       = db.get_previous_stats(HARDCODED_ARTIST_ID)
-    df_full    = db.get_artist_history_full(HARDCODED_ARTIST_ID)
+    # Données
+    artist   = sps.resolve_artist(HARDCODED_ARTIST_ID)
+    stats    = db.get_latest_stats(HARDCODED_ARTIST_ID)
+    prev     = db.get_previous_stats(HARDCODED_ARTIST_ID)
+    df_full  = db.get_artist_history_full(HARDCODED_ARTIST_ID)
 
-    # ── Sidebar ───────────────────────────────────────────────────────────────
-    date_from, date_to = build_sidebar(artist)
-    df_history = db.filter_history(df_full, date_from, date_to)
+    sync_date       = stats.get("date_enregistrement", "—")
+    date_from, date_to = build_sidebar(artist, sync_date)
+    df_history      = db.filter_history(df_full, date_from, date_to)
 
-    # ── Header ───────────────────────────────────────────────────────────────
+    # Header
     artist_name = artist.get("name", "KITO")
     st.markdown(f"""
         <div class="page-eyebrow">Digital Next · Music Intelligence</div>
         <div class="page-title">Studio Nuit — <em>{artist_name}</em></div>
         <div class="page-sub">
-            Performance tracker · Données live depuis Turso Cloud &amp; Spotify API
+            Performance tracker · Données Turso Cloud · Sync quotidienne GitHub Actions
         </div>
     """, unsafe_allow_html=True)
 
-    # ── Sections ─────────────────────────────────────────────────────────────
     section_hud(stats, prev)
     section_audience()
     section_chansonometre()
     section_trends(df_history)
-    section_top_tracks()
 
-    # ── Footer ────────────────────────────────────────────────────────────────
     st.markdown(f"""
         <div class="footer">
             DIGITAL NEXT PLATFORM &nbsp;·&nbsp; RBK GROUPE &nbsp;·&nbsp;

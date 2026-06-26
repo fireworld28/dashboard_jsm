@@ -1,10 +1,22 @@
 # spotify_service.py
+"""
+Service Spotify via Spotipy (Client Credentials Flow).
+- artist_top_tracks() est déprécié par Spotify depuis 2024 → retourne 403
+- Remplacé par search(type='track', q='artist:NOM') pour les top titres
+- audio_features() toujours fonctionnel
+"""
+
 import os
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 import streamlit as st
 import pandas as pd
-from config import PALETTE
+
+try:
+    from config import PALETTE
+    _LIME = PALETTE.get("lime", "C8F135")
+except Exception:
+    _LIME = "C8F135"
 
 _AUDIO_KEY_MAP = {
     "acousticness":  "Acoustique",
@@ -26,17 +38,19 @@ _NEUTRAL_PROFILE = {
 @st.cache_resource
 def get_spotify_client() -> spotipy.Spotify:
     """Client Spotipy unique et persistant pour toute la session."""
+    client_id, client_secret = "", ""
     try:
         client_id     = st.secrets["SPOTIFY_CLIENT_ID"]
         client_secret = st.secrets["SPOTIFY_CLIENT_SECRET"]
     except Exception:
-        client_id     = os.getenv("SPOTIFY_CLIENT_ID", "")
+        pass
+    if not client_id:
+        client_id = os.getenv("SPOTIFY_CLIENT_ID", "")
+    if not client_secret:
         client_secret = os.getenv("SPOTIFY_CLIENT_SECRET", "")
-
     if not client_id or not client_secret:
         st.error("**Identifiants Spotify manquants.** Vérifie ton fichier secrets.toml.")
         st.stop()
-
     try:
         return spotipy.Spotify(
             auth_manager=SpotifyClientCredentials(
@@ -45,7 +59,7 @@ def get_spotify_client() -> spotipy.Spotify:
             )
         )
     except Exception as exc:
-        st.error(f"**Échec de la connexion à l'API Spotify.**\n\n`{exc}`")
+        st.error(f"**Échec connexion Spotify.** `{exc}`")
         st.stop()
 
 
@@ -56,7 +70,10 @@ def resolve_artist(spotify_id: str) -> dict:
     try:
         data        = sp.artist(spotify_id)
         images      = data.get("images", [])
-        photo_url   = images[0]["url"] if images else f"https://via.placeholder.com/150/{PALETTE['lime'][1:]}/0D0F14?text={data['name'][:2].upper()}"
+        photo_url   = (
+            images[0]["url"] if images
+            else f"https://via.placeholder.com/150/{_LIME[1:]}/0D0F14?text={data['name'][:2].upper()}"
+        )
         genres      = data.get("genres", [])
         genre_label = " / ".join(g.title() for g in genres[:2]) if genres else "N/A"
         return {
@@ -74,17 +91,41 @@ def resolve_artist(spotify_id: str) -> dict:
             "genre":           "Rap Français / Drill",
             "followers_base":  32000,
             "popularity_base": 44,
-            "photo_url":       f"https://via.placeholder.com/150/{PALETTE['lime'][1:]}/0D0F14?text=KT",
+            "photo_url":       f"https://via.placeholder.com/150/{_LIME[1:]}/0D0F14?text=KT",
         }
+
+
+def _get_top_tracks_via_search(sp: spotipy.Spotify, spotify_id: str) -> list:
+    """
+    Récupère jusqu'à 10 titres via search() — alternative officielle
+    à artist_top_tracks() déprécié par Spotify (retourne 403 depuis 2024).
+    """
+    try:
+        artist_data = sp.artist(spotify_id)
+        artist_name = artist_data.get("name", "")
+        results = sp.search(
+            q=f"artist:{artist_name}",
+            type="track",
+            limit=50,
+        )
+        tracks = results.get("tracks", {}).get("items", [])
+        filtered = [
+            t for t in tracks
+            if any(a["id"] == spotify_id for a in t.get("artists", []))
+        ]
+        filtered.sort(key=lambda t: t.get("popularity", 0), reverse=True)
+        return filtered[:10]
+    except Exception:
+        return []
 
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_audio_profile(spotify_id: str) -> dict:
-    """Analyse l'empreinte sonore de l'artiste."""
+    """Analyse l'empreinte sonore de l'artiste sur ses top titres."""
     sp = get_spotify_client()
     try:
-        top       = sp.artist_top_tracks(spotify_id)
-        track_ids = [t["id"] for t in top.get("tracks", [])[:10] if t.get("id")]
+        tracks    = _get_top_tracks_via_search(sp, spotify_id)
+        track_ids = [t["id"] for t in tracks if t.get("id")]
         if not track_ids:
             return dict(_NEUTRAL_PROFILE)
         raw      = sp.audio_features(track_ids) or []
@@ -103,12 +144,13 @@ def fetch_audio_profile(spotify_id: str) -> dict:
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_top_tracks_df(spotify_id: str) -> pd.DataFrame:
-    """Génère le tableau Top 10 Spotify avec indicateurs audio."""
+    """Génère le tableau Top 10 titres avec indicateurs audio."""
     _COLS = ["🎵 Titre", "Popularité", "Album", "Sortie", "Énergie", "Dansabilité", "Durée"]
     sp = get_spotify_client()
     try:
-        top       = sp.artist_top_tracks(spotify_id)
-        tracks    = top.get("tracks", [])[:10]
+        tracks = _get_top_tracks_via_search(sp, spotify_id)
+        if not tracks:
+            return pd.DataFrame(columns=_COLS)
         track_ids = [t["id"] for t in tracks if t.get("id")]
         raw       = sp.audio_features(track_ids) or []
         feat_map  = {f["id"]: f for f in raw if f and isinstance(f, dict)}
@@ -120,7 +162,7 @@ def fetch_top_tracks_df(spotify_id: str) -> pd.DataFrame:
             album  = t.get("album", {})
             rows.append({
                 "🎵 Titre":    t["name"],
-                "Popularité":  t["popularity"],
+                "Popularité":  t.get("popularity", 0),
                 "Album":       album.get("name", "—"),
                 "Sortie":      album.get("release_date", "—")[:4],
                 "Énergie":     round(f.get("energy",       0.0), 2),

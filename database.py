@@ -1,10 +1,9 @@
 # database.py
 """
 Couche d'accès aux données — Turso Cloud via libsql-client (SDK HTTP officiel).
-Zéro compilation Rust — compatible Python 3.11+ et Streamlit Cloud.
+Zéro compilation Rust — compatible Python 3.11 et Streamlit Cloud.
 
 Stratégie de cache :
-  get_client()              → @st.cache_resource : client unique par session
   get_artist_history_full() → @st.cache_data(ttl=3600) : 1 appel DB/heure
   filter_history()          → filtrage en mémoire, zéro appel réseau
 """
@@ -15,12 +14,31 @@ import libsql_client
 import pandas as pd
 import streamlit as st
 
-TURSO_URL   = st.secrets.get("TURSO_DATABASE_URL") or os.getenv("TURSO_DATABASE_URL")
-TURSO_TOKEN = st.secrets.get("TURSO_AUTH_TOKEN")   or os.getenv("TURSO_AUTH_TOKEN")
+# ── FIX PROTOCOLE : libsql-client exige https:// (pas libsql:// ni wss://) ──
+def _normalize_url(url: str) -> str:
+    """Convertit n'importe quel format Turso URL en https:// pour libsql-client."""
+    if not url:
+        return url
+    # libsql://  →  https://
+    if url.startswith("libsql://"):
+        return url.replace("libsql://", "https://", 1)
+    # wss://  →  https://
+    if url.startswith("wss://"):
+        return url.replace("wss://", "https://", 1)
+    # ws://  →  http://
+    if url.startswith("ws://"):
+        return url.replace("ws://", "http://", 1)
+    return url
+
+
+_RAW_URL    = st.secrets.get("TURSO_DATABASE_URL") or os.getenv("TURSO_DATABASE_URL", "")
+_RAW_TOKEN  = st.secrets.get("TURSO_AUTH_TOKEN")   or os.getenv("TURSO_AUTH_TOKEN", "")
+TURSO_URL   = _normalize_url(_RAW_URL)
+TURSO_TOKEN = _RAW_TOKEN
 
 
 def _run(coro):
-    """Exécute une coroutine asyncio depuis un contexte synchrone."""
+    """Exécute une coroutine asyncio depuis un contexte synchrone Streamlit."""
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
@@ -34,16 +52,14 @@ def _run(coro):
 
 
 async def _execute(sql: str, args: list = None):
-    """Exécute une requête SQL sur Turso Cloud via HTTP."""
+    """Exécute une requête SQL sur Turso Cloud via HTTPS."""
     async with libsql_client.create_client(
         url=TURSO_URL,
         auth_token=TURSO_TOKEN,
     ) as client:
         if args:
-            result = await client.execute(sql, args)
-        else:
-            result = await client.execute(sql)
-        return result
+            return await client.execute(sql, args)
+        return await client.execute(sql)
 
 
 async def _batch(statements: list):
@@ -63,27 +79,24 @@ def init_db() -> None:
         st.error("⚠️ Identifiants Turso introuvables — vérifie secrets.toml.")
         return
     try:
-        _run(_batch([
-            libsql_client.Statement("""
-                CREATE TABLE IF NOT EXISTS historique_artistes (
-                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                    date_enregistrement DATE    NOT NULL,
-                    artiste_name        TEXT    NOT NULL,
-                    spotify_id          TEXT    NOT NULL,
-                    followers_count     INTEGER NOT NULL,
-                    popularity_score    INTEGER NOT NULL,
-                    streams_real        INTEGER NOT NULL DEFAULT 0,
-                    UNIQUE (spotify_id, date_enregistrement)
-                )
-            """),
-        ]))
-        # Migration silencieuse
+        _run(_execute("""
+            CREATE TABLE IF NOT EXISTS historique_artistes (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                date_enregistrement DATE    NOT NULL,
+                artiste_name        TEXT    NOT NULL,
+                spotify_id          TEXT    NOT NULL,
+                followers_count     INTEGER NOT NULL,
+                popularity_score    INTEGER NOT NULL,
+                streams_real        INTEGER NOT NULL DEFAULT 0,
+                UNIQUE (spotify_id, date_enregistrement)
+            )
+        """))
         try:
             _run(_execute(
                 "ALTER TABLE historique_artistes ADD COLUMN streams_real INTEGER NOT NULL DEFAULT 0"
             ))
         except Exception:
-            pass
+            pass  # colonne déjà présente
     except Exception as e:
         st.error(f"Erreur init DB : {e}")
 
@@ -112,7 +125,7 @@ def get_artist_history_full(spotify_id: str) -> pd.DataFrame:
         if not result.rows:
             return pd.DataFrame(columns=[
                 "date_enregistrement", "followers_count",
-                "popularity_score", "streams_real"
+                "popularity_score", "streams_real",
             ])
         cols = [c.name for c in result.columns]
         df   = pd.DataFrame([list(r) for r in result.rows], columns=cols)
@@ -122,7 +135,7 @@ def get_artist_history_full(spotify_id: str) -> pd.DataFrame:
         st.warning(f"Impossible de charger l'historique : {e}")
         return pd.DataFrame(columns=[
             "date_enregistrement", "followers_count",
-            "popularity_score", "streams_real"
+            "popularity_score", "streams_real",
         ])
 
 
@@ -137,8 +150,8 @@ def filter_history(df: pd.DataFrame, date_from, date_to) -> pd.DataFrame:
     return df[mask].copy()
 
 
-# Alias de compatibilité
 def get_artist_history(spotify_id: str, date_from=None, date_to=None) -> pd.DataFrame:
+    """Alias de compatibilité."""
     df = get_artist_history_full(spotify_id)
     if date_from or date_to:
         df = filter_history(

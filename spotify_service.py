@@ -1,9 +1,12 @@
 # spotify_service.py
 """
 Service Spotify via Spotipy (Client Credentials Flow).
-- artist_top_tracks() est déprécié par Spotify depuis 2024 → retourne 403
-- Remplacé par search(type='track', q='artist:NOM') pour les top titres
-- audio_features() toujours fonctionnel
+
+Historique des endpoints testés :
+  - artist_top_tracks(country='FR') → 403 (déprécié nov 2024)
+  - search(limit=50) → 400 Invalid limit
+  - search(limit=20) → 400 Invalid limit (market=None injecté par spotipy)
+  Solution finale : artist_albums() + album_tracks() — stables et sans market requis
 """
 
 import os
@@ -49,7 +52,7 @@ def get_spotify_client() -> spotipy.Spotify:
     if not client_secret:
         client_secret = os.getenv("SPOTIFY_CLIENT_SECRET", "")
     if not client_id or not client_secret:
-        st.error("**Identifiants Spotify manquants.** Vérifie ton fichier secrets.toml.")
+        st.error("**Identifiants Spotify manquants.** Vérifie secrets.toml.")
         st.stop()
     try:
         return spotipy.Spotify(
@@ -65,7 +68,7 @@ def get_spotify_client() -> spotipy.Spotify:
 
 @st.cache_data(ttl=900, show_spinner=False)
 def resolve_artist(spotify_id: str) -> dict:
-    """Récupère l'identité de l'artiste avec mécanisme failsafe."""
+    """Récupère l'identité de l'artiste avec failsafe."""
     sp = get_spotify_client()
     try:
         data        = sp.artist(spotify_id)
@@ -95,36 +98,73 @@ def resolve_artist(spotify_id: str) -> dict:
         }
 
 
-def _get_top_tracks_via_search(sp: spotipy.Spotify, spotify_id: str) -> list:
+def _get_artist_tracks(sp: spotipy.Spotify, spotify_id: str) -> list:
     """
-    Récupère jusqu'à 10 titres via search() — alternative officielle
-    à artist_top_tracks() déprécié par Spotify (retourne 403 depuis 2024).
+    Collecte les titres d'un artiste via artist_albums() + album_tracks().
+    Évite artist_top_tracks (déprécié → 403) et search (market=None → 400).
+    Retourne les 10 titres les plus populaires.
     """
     try:
-        artist_data = sp.artist(spotify_id)
-        artist_name = artist_data.get("name", "")
-        results = sp.search(
-            q=f"artist:{artist_name}",
-            type="track",
-            limit=20,
+        all_tracks = []
+
+        # Récupérer les albums et singles de l'artiste
+        albums_result = sp.artist_albums(
+            spotify_id,
+            include_groups="album,single",
+            limit=10,
         )
-        tracks = results.get("tracks", {}).get("items", [])
-        filtered = [
-            t for t in tracks
-            if any(a["id"] == spotify_id for a in t.get("artists", []))
-        ]
-        filtered.sort(key=lambda t: t.get("popularity", 0), reverse=True)
-        return filtered[:10]
+        albums = albums_result.get("items", [])
+
+        for album in albums[:6]:  # Limiter à 6 albums pour la perf
+            album_id = album.get("id")
+            if not album_id:
+                continue
+            tracks_result = sp.album_tracks(album_id, limit=10)
+            for track in tracks_result.get("items", []):
+                # Vérifier que l'artiste principal est bien celui recherché
+                if any(a["id"] == spotify_id for a in track.get("artists", [])):
+                    # Récupérer la popularité via tracks() en batch
+                    all_tracks.append({
+                        "id":           track["id"],
+                        "name":         track["name"],
+                        "duration_ms":  track.get("duration_ms", 0),
+                        "album":        album,
+                        "artists":      track.get("artists", []),
+                    })
+
+        if not all_tracks:
+            return []
+
+        # Récupérer la popularité de tous les tracks en batch (max 50)
+        track_ids  = [t["id"] for t in all_tracks if t.get("id")][:50]
+        full_tracks = sp.tracks(track_ids).get("tracks", [])
+
+        # Fusionner popularité
+        pop_map = {t["id"]: t.get("popularity", 0) for t in full_tracks if t}
+        for t in all_tracks:
+            t["popularity"] = pop_map.get(t["id"], 0)
+
+        # Dédoublonner par nom et trier par popularité
+        seen  = set()
+        dedup = []
+        for t in sorted(all_tracks, key=lambda x: x["popularity"], reverse=True):
+            name_lower = t["name"].lower()
+            if name_lower not in seen:
+                seen.add(name_lower)
+                dedup.append(t)
+
+        return dedup[:10]
+
     except Exception:
         return []
 
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_audio_profile(spotify_id: str) -> dict:
-    """Analyse l'empreinte sonore de l'artiste sur ses top titres."""
+    """Analyse l'empreinte sonore de l'artiste."""
     sp = get_spotify_client()
     try:
-        tracks    = _get_top_tracks_via_search(sp, spotify_id)
+        tracks    = _get_artist_tracks(sp, spotify_id)
         track_ids = [t["id"] for t in tracks if t.get("id")]
         if not track_ids:
             return dict(_NEUTRAL_PROFILE)
@@ -148,12 +188,14 @@ def fetch_top_tracks_df(spotify_id: str) -> pd.DataFrame:
     _COLS = ["🎵 Titre", "Popularité", "Album", "Sortie", "Énergie", "Dansabilité", "Durée"]
     sp = get_spotify_client()
     try:
-        tracks = _get_top_tracks_via_search(sp, spotify_id)
+        tracks = _get_artist_tracks(sp, spotify_id)
         if not tracks:
             return pd.DataFrame(columns=_COLS)
+
         track_ids = [t["id"] for t in tracks if t.get("id")]
         raw       = sp.audio_features(track_ids) or []
         feat_map  = {f["id"]: f for f in raw if f and isinstance(f, dict)}
+
         rows = []
         for t in tracks:
             f      = feat_map.get(t["id"], {})

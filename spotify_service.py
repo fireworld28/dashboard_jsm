@@ -2,11 +2,8 @@
 """
 Service Spotify via Spotipy (Client Credentials Flow).
 
-Historique des endpoints testés :
-  - artist_top_tracks(country='FR') → 403 (déprécié nov 2024)
-  - search(limit=50) → 400 Invalid limit
-  - search(limit=20) → 400 Invalid limit (market=None injecté par spotipy)
-  Solution finale : artist_albums() + album_tracks() — stables et sans market requis
+Fix critique : Spotipy 2.26 injecte market=None sur tous les endpoints,
+ce qui cause 400/403. On patch _get() pour filtrer les params None.
 """
 
 import os
@@ -38,6 +35,29 @@ _NEUTRAL_PROFILE = {
 }
 
 
+def _make_clean_client(client_id: str, client_secret: str) -> spotipy.Spotify:
+    """
+    Crée un client Spotipy patchant _get() pour supprimer
+    les paramètres None avant chaque requête API.
+    Spotipy 2.26 injecte market=None sur search/tracks/etc → 400/403.
+    """
+    sp = spotipy.Spotify(
+        auth_manager=SpotifyClientCredentials(
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+    )
+
+    # Patch : filtrer tous les kwargs None avant l'appel HTTP
+    original_get = sp._get
+    def _clean_get(url, args=None, payload=None, **kwargs):
+        clean_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        return original_get(url, args=args, payload=payload, **clean_kwargs)
+    sp._get = _clean_get
+
+    return sp
+
+
 @st.cache_resource
 def get_spotify_client() -> spotipy.Spotify:
     """Client Spotipy unique et persistant pour toute la session."""
@@ -55,12 +75,7 @@ def get_spotify_client() -> spotipy.Spotify:
         st.error("**Identifiants Spotify manquants.** Vérifie secrets.toml.")
         st.stop()
     try:
-        return spotipy.Spotify(
-            auth_manager=SpotifyClientCredentials(
-                client_id=client_id,
-                client_secret=client_secret,
-            )
-        )
+        return _make_clean_client(client_id, client_secret)
     except Exception as exc:
         st.error(f"**Échec connexion Spotify.** `{exc}`")
         st.stop()
@@ -100,14 +115,12 @@ def resolve_artist(spotify_id: str) -> dict:
 
 def _get_artist_tracks(sp: spotipy.Spotify, spotify_id: str) -> list:
     """
-    Collecte les titres d'un artiste via artist_albums() + album_tracks().
-    Évite artist_top_tracks (déprécié → 403) et search (market=None → 400).
-    Retourne les 10 titres les plus populaires.
+    Collecte les titres via artist_albums() + album_tracks() + tracks().
+    Évite artist_top_tracks (déprécié) et search (market=None problématique).
     """
     try:
         all_tracks = []
 
-        # Récupérer les albums et singles de l'artiste
         albums_result = sp.artist_albums(
             spotify_id,
             include_groups="album,single",
@@ -115,42 +128,38 @@ def _get_artist_tracks(sp: spotipy.Spotify, spotify_id: str) -> list:
         )
         albums = albums_result.get("items", [])
 
-        for album in albums[:6]:  # Limiter à 6 albums pour la perf
+        for album in albums[:6]:
             album_id = album.get("id")
             if not album_id:
                 continue
             tracks_result = sp.album_tracks(album_id, limit=10)
             for track in tracks_result.get("items", []):
-                # Vérifier que l'artiste principal est bien celui recherché
                 if any(a["id"] == spotify_id for a in track.get("artists", [])):
-                    # Récupérer la popularité via tracks() en batch
                     all_tracks.append({
-                        "id":           track["id"],
-                        "name":         track["name"],
-                        "duration_ms":  track.get("duration_ms", 0),
-                        "album":        album,
-                        "artists":      track.get("artists", []),
+                        "id":          track["id"],
+                        "name":        track["name"],
+                        "duration_ms": track.get("duration_ms", 0),
+                        "album":       album,
+                        "artists":     track.get("artists", []),
+                        "popularity":  0,
                     })
 
         if not all_tracks:
             return []
 
-        # Récupérer la popularité de tous les tracks en batch (max 50)
-        track_ids  = [t["id"] for t in all_tracks if t.get("id")][:50]
+        # Récupérer la popularité via tracks() — le patch _get() supprime market=None
+        track_ids   = [t["id"] for t in all_tracks if t.get("id")][:50]
         full_tracks = sp.tracks(track_ids).get("tracks", [])
-
-        # Fusionner popularité
         pop_map = {t["id"]: t.get("popularity", 0) for t in full_tracks if t}
         for t in all_tracks:
             t["popularity"] = pop_map.get(t["id"], 0)
 
-        # Dédoublonner par nom et trier par popularité
-        seen  = set()
-        dedup = []
+        # Dédoublonner et trier par popularité
+        seen, dedup = set(), []
         for t in sorted(all_tracks, key=lambda x: x["popularity"], reverse=True):
-            name_lower = t["name"].lower()
-            if name_lower not in seen:
-                seen.add(name_lower)
+            key = t["name"].lower()
+            if key not in seen:
+                seen.add(key)
                 dedup.append(t)
 
         return dedup[:10]

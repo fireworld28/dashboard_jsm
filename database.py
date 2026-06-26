@@ -127,7 +127,7 @@ def get_artist_history_full(spotify_id: str) -> pd.DataFrame:
                 "date_enregistrement", "followers_count",
                 "popularity_score", "streams_real",
             ])
-        cols = [c.name for c in result.columns]
+        cols = [c if isinstance(c, str) else c.name for c in result.columns]
         df   = pd.DataFrame([list(r) for r in result.rows], columns=cols)
         df["date_enregistrement"] = pd.to_datetime(df["date_enregistrement"])
         return df

@@ -83,7 +83,7 @@ def fetch_audio_profile(spotify_id: str) -> dict:
     """Analyse l'empreinte sonore de l'artiste."""
     sp = get_spotify_client()
     try:
-        top       = sp.artist_top_tracks(spotify_id, country="FR")
+        top       = sp.artist_top_tracks(spotify_id)
         track_ids = [t["id"] for t in top.get("tracks", [])[:10] if t.get("id")]
         if not track_ids:
             return dict(_NEUTRAL_PROFILE)
@@ -107,7 +107,7 @@ def fetch_top_tracks_df(spotify_id: str) -> pd.DataFrame:
     _COLS = ["🎵 Titre", "Popularité", "Album", "Sortie", "Énergie", "Dansabilité", "Durée"]
     sp = get_spotify_client()
     try:
-        top       = sp.artist_top_tracks(spotify_id, country="FR")
+        top       = sp.artist_top_tracks(spotify_id)
         tracks    = top.get("tracks", [])[:10]
         track_ids = [t["id"] for t in tracks if t.get("id")]
         raw       = sp.audio_features(track_ids) or []

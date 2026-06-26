@@ -106,7 +106,7 @@ def _get_top_tracks_via_search(sp: spotipy.Spotify, spotify_id: str) -> list:
         results = sp.search(
             q=f"artist:{artist_name}",
             type="track",
-            limit=50,
+            limit=20,
         )
         tracks = results.get("tracks", {}).get("items", [])
         filtered = [

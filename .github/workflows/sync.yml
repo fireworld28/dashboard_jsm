@@ -32,7 +32,7 @@ jobs:
           cache: "pip"
 
       - name: Installation des dépendances légères
-        run: pip install spotipy libsql-experimental python-dotenv
+        run: pip install spotipy libsql-client python-dotenv
 
       - name: Synchronisation Spotify → Turso
         env:
